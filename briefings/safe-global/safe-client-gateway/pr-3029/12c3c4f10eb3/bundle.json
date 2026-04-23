@@ -1,0 +1,496 @@
+{
+  "slug": "safe-global/safe-client-gateway",
+  "pr_number": 3029,
+  "head_sha": "12c3c4f10eb3c60feae37167ba30719ef7b0a18e",
+  "head_sha_short": "12c3c4f10eb3",
+  "pr_title": "Revert \"fix: drop stale counterfactual_safes table before recreating it\"",
+  "created_at": 1776974111728,
+  "briefing": {
+    "id": 10,
+    "pr": {
+      "repo_slug": "safe-global/safe-client-gateway",
+      "number": 3029
+    },
+    "head_sha": "12c3c4f10eb3c60feae37167ba30719ef7b0a18e",
+    "base_sha": "db33036830590d781f16b2cb0da45759c656a294",
+    "status": "done",
+    "model": "claude-sonnet-4-6",
+    "cost_cents": 6,
+    "latency_ms": 43432,
+    "summary_md": "This PR reverts #3027, which had added a `DROP TABLE IF EXISTS counterfactual_safes CASCADE` statement to the `up` method of the `CreateCounterfactualSafes1775500000000` TypeORM migration. The revert removes that drop statement, restoring the migration to its original form that only creates the table. The motivation for the revert is not explicitly stated in the PR but likely relates to unintended side effects of the CASCADE drop, such as data loss or failures in environments that do not have the legacy stale table. The underlying problem that #3027 attempted to solve—an orphaned legacy `counterfactual_safes` table with an incompatible schema blocking the migration—remains unresolved by this revert.",
+    "file_summaries": [
+      {
+        "path": "migrations/1775500000000-create-counterfactual-safes.ts",
+        "what_changed": "Removed the `DROP TABLE IF EXISTS counterfactual_safes CASCADE` statement from the `up` migration in `CreateCounterfactualSafes1775500000000`, reverting PR #3027's fix that dropped an orphaned legacy table before recreating it.",
+        "why_it_matters": "Likely reverted because the drop-before-create approach caused issues (e.g., data loss, migration failures in environments without the stale table, or unintended side effects from CASCADE).",
+        "risk_hints": [
+          "If any environment still has the old incompatible `counterfactual_safes` table from the Knex module, the `CREATE TABLE` will now fail with a 'relation already exists' error",
+          "Reverting means the original problem (orphaned table with incompatible schema blocking migration) is unresolved for affected deployments",
+          "Check whether a separate migration or manual remediation step is planned to handle the stale table scenario",
+          "Verify that CI/CD and staging environments do not have the legacy table present before merging"
+        ]
+      }
+    ],
+    "architecture_delta": {
+      "architecture_notes": "The change touches a single TypeORM migration file (`migrations/1775500000000-create-counterfactual-safes.ts`) within the safe-client-gateway service. The migration's `up` method now only issues a `CREATE TABLE` for `counterfactual_safes` without first dropping any pre-existing table, meaning environments with a stale or incompatible `counterfactual_safes` table (e.g., left over from a Knex-based module) will encounter a 'relation already exists' error at migration time. No other subsystems, data flows, or API contracts are affected by this single-line revert.",
+      "reviewer_checklist": [
+        "Confirm that no production or staging environment currently has a stale `counterfactual_safes` table with an incompatible schema that would cause the `CREATE TABLE` to fail.",
+        "Verify that a follow-up plan or separate migration exists to handle environments where the legacy orphaned table may still be present.",
+        "Check that the `down` migration method is still correct and consistent with the reverted `up` method.",
+        "Ensure CI/CD pipelines run against a clean database state so the missing drop statement does not silently mask migration failures in test environments.",
+        "Confirm the reason for reverting #3027 is documented (e.g., in the PR description or a linked issue) so the team understands the trade-off being made."
+      ]
+    },
+    "tour": {
+      "chapters": [
+        {
+          "title": "Why this revert happened",
+          "step_range": [
+            1,
+            2
+          ]
+        },
+        {
+          "title": "The migration before and after",
+          "step_range": [
+            3,
+            7
+          ]
+        },
+        {
+          "title": "What can go wrong",
+          "step_range": [
+            8,
+            11
+          ]
+        },
+        {
+          "title": "Bottom line",
+          "step_range": [
+            12,
+            12
+          ]
+        }
+      ],
+      "total_seconds": 175,
+      "steps": [
+        {
+          "step": 1,
+          "phase": "motivation",
+          "location": {
+            "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+            "line_range": [
+              1,
+              5
+            ],
+            "symbol": "CreateCounterfactualSafes1775500000000"
+          },
+          "action": "open",
+          "narration": "We are looking at a revert of PR 3027, which had added a drop-table statement to this migration. The concern is that dropping the table with cascade could cause data loss or break environments that never had the legacy table in the first place.",
+          "estimated_seconds": 15
+        },
+        {
+          "step": 2,
+          "phase": "motivation",
+          "location": {
+            "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+            "line_range": [
+              1,
+              5
+            ],
+            "symbol": "CreateCounterfactualSafes1775500000000"
+          },
+          "action": "scroll-to",
+          "narration": "The original problem was an orphaned counterfactual safes table left over from an old Knex-based module, whose schema was incompatible with the new TypeORM migration. PR 3027 tried to fix that by dropping the stale table first, but this revert pulls that fix back out.",
+          "estimated_seconds": 15,
+          "diagram": {
+            "kind": "flowchart",
+            "title": "What PR 3027 tried to fix and what this revert undoes",
+            "mermaid": "flowchart TD\n  A[Legacy Knex module] -->|left behind| B[stale counterfactual_safes table]\n  B -->|blocks| C[TypeORM migration CREATE TABLE]\n  C -->|PR 3027 fix| D[DROP TABLE IF EXISTS CASCADE then CREATE]\n  D -->|risk| E[data loss or failure on clean envs]\n  E -->|this revert| F[Remove DROP, restore plain CREATE TABLE]"
+          }
+        },
+        {
+          "step": 3,
+          "phase": "change",
+          "location": {
+            "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+            "line_range": [
+              4,
+              10
+            ],
+            "symbol": "CreateCounterfactualSafes1775500000000"
+          },
+          "action": "scroll-to",
+          "narration": "Here is the migration class itself. It is a standard TypeORM migration with an up method and a down method, timestamped to run in a specific order relative to other migrations.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 4,
+          "phase": "change",
+          "location": {
+            "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+            "line_range": [
+              6,
+              14
+            ],
+            "symbol": "CreateCounterfactualSafes1775500000000"
+          },
+          "action": "scroll-to",
+          "narration": "This is the up method after the revert. It now only issues a create table statement for counterfactual safes, with no preceding drop. The single line that PR 3027 added, the drop table if exists with cascade, is simply gone.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 5,
+          "phase": "change",
+          "location": {
+            "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+            "line_range": [
+              6,
+              8
+            ],
+            "symbol": "CreateCounterfactualSafes1775500000000"
+          },
+          "action": "scroll-to",
+          "narration": "To be precise, the removed line would have executed a drop table if exists counterfactual safes cascade before the create. Removing it means the up method is now a pure create, exactly as it was before PR 3027 landed.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 6,
+          "phase": "change",
+          "location": {
+            "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+            "line_range": [
+              20,
+              30
+            ],
+            "symbol": "CreateCounterfactualSafes1775500000000"
+          },
+          "action": "scroll-to",
+          "narration": "The down method is untouched by this revert. It still drops the counterfactual safes table when rolling back, which is the expected teardown behavior for any create-table migration.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 7,
+          "phase": "change",
+          "location": {
+            "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+            "line_range": [
+              4,
+              30
+            ],
+            "symbol": "CreateCounterfactualSafes1775500000000"
+          },
+          "action": "flick-back",
+          "narration": "Zooming out, this is a one-line diff in a single file. No other migrations, no API contracts, and no other modules are touched. The blast radius of the change itself is minimal, but the implications for certain environments are not.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 8,
+          "phase": "risk",
+          "location": {
+            "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+            "line_range": [
+              6,
+              10
+            ],
+            "symbol": "CreateCounterfactualSafes1775500000000"
+          },
+          "action": "scroll-to",
+          "narration": "The most immediate risk is that any environment still carrying the old incompatible counterfactual safes table will hit a relation already exists error the moment this migration runs. That is the exact failure mode PR 3027 was trying to prevent.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 9,
+          "phase": "risk",
+          "location": {
+            "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+            "line_range": [
+              6,
+              10
+            ],
+            "symbol": "CreateCounterfactualSafes1775500000000"
+          },
+          "action": "scroll-to",
+          "narration": "This revert does not resolve the underlying problem; it just removes the attempted fix. Reviewers should confirm whether a separate migration or a manual remediation script is planned to handle environments that have the stale table.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 10,
+          "phase": "risk",
+          "location": {
+            "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+            "line_range": [
+              6,
+              10
+            ],
+            "symbol": "CreateCounterfactualSafes1775500000000"
+          },
+          "action": "scroll-to",
+          "narration": "The cascade keyword in the dropped line was particularly dangerous because it would silently remove any dependent objects along with the table. That is a plausible reason for the revert, especially if foreign keys or views referenced the old table in any environment.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 11,
+          "phase": "risk",
+          "location": {
+            "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+            "line_range": [
+              1,
+              5
+            ],
+            "symbol": "CreateCounterfactualSafes1775500000000"
+          },
+          "action": "scroll-to",
+          "narration": "Before merging, it is worth verifying that CI and staging environments do not have the legacy table present. If they do, this migration will fail on deploy, and the team will need a manual fix or a follow-up migration to clear the stale table safely.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 12,
+          "phase": "wrap",
+          "location": {
+            "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+            "line_range": [
+              4,
+              30
+            ],
+            "symbol": "CreateCounterfactualSafes1775500000000"
+          },
+          "action": "flick-back",
+          "narration": "This revert is a one-line rollback that trades the risk of cascading data loss for the risk of a migration failure on environments with a stale table, and the real fix still needs to land somewhere.",
+          "estimated_seconds": 13
+        }
+      ]
+    },
+    "created_at": 1776974111728
+  },
+  "tour": {
+    "chapters": [
+      {
+        "title": "Why this revert happened",
+        "step_range": [
+          1,
+          2
+        ]
+      },
+      {
+        "title": "The migration before and after",
+        "step_range": [
+          3,
+          7
+        ]
+      },
+      {
+        "title": "What can go wrong",
+        "step_range": [
+          8,
+          11
+        ]
+      },
+      {
+        "title": "Bottom line",
+        "step_range": [
+          12,
+          12
+        ]
+      }
+    ],
+    "total_seconds": 175,
+    "steps": [
+      {
+        "step": 1,
+        "phase": "motivation",
+        "location": {
+          "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+          "line_range": [
+            1,
+            5
+          ],
+          "symbol": "CreateCounterfactualSafes1775500000000"
+        },
+        "action": "open",
+        "narration": "We are looking at a revert of PR 3027, which had added a drop-table statement to this migration. The concern is that dropping the table with cascade could cause data loss or break environments that never had the legacy table in the first place.",
+        "estimated_seconds": 15
+      },
+      {
+        "step": 2,
+        "phase": "motivation",
+        "location": {
+          "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+          "line_range": [
+            1,
+            5
+          ],
+          "symbol": "CreateCounterfactualSafes1775500000000"
+        },
+        "action": "scroll-to",
+        "narration": "The original problem was an orphaned counterfactual safes table left over from an old Knex-based module, whose schema was incompatible with the new TypeORM migration. PR 3027 tried to fix that by dropping the stale table first, but this revert pulls that fix back out.",
+        "estimated_seconds": 15,
+        "diagram": {
+          "kind": "flowchart",
+          "title": "What PR 3027 tried to fix and what this revert undoes",
+          "mermaid": "flowchart TD\n  A[Legacy Knex module] -->|left behind| B[stale counterfactual_safes table]\n  B -->|blocks| C[TypeORM migration CREATE TABLE]\n  C -->|PR 3027 fix| D[DROP TABLE IF EXISTS CASCADE then CREATE]\n  D -->|risk| E[data loss or failure on clean envs]\n  E -->|this revert| F[Remove DROP, restore plain CREATE TABLE]"
+        }
+      },
+      {
+        "step": 3,
+        "phase": "change",
+        "location": {
+          "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+          "line_range": [
+            4,
+            10
+          ],
+          "symbol": "CreateCounterfactualSafes1775500000000"
+        },
+        "action": "scroll-to",
+        "narration": "Here is the migration class itself. It is a standard TypeORM migration with an up method and a down method, timestamped to run in a specific order relative to other migrations.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 4,
+        "phase": "change",
+        "location": {
+          "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+          "line_range": [
+            6,
+            14
+          ],
+          "symbol": "CreateCounterfactualSafes1775500000000"
+        },
+        "action": "scroll-to",
+        "narration": "This is the up method after the revert. It now only issues a create table statement for counterfactual safes, with no preceding drop. The single line that PR 3027 added, the drop table if exists with cascade, is simply gone.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 5,
+        "phase": "change",
+        "location": {
+          "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+          "line_range": [
+            6,
+            8
+          ],
+          "symbol": "CreateCounterfactualSafes1775500000000"
+        },
+        "action": "scroll-to",
+        "narration": "To be precise, the removed line would have executed a drop table if exists counterfactual safes cascade before the create. Removing it means the up method is now a pure create, exactly as it was before PR 3027 landed.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 6,
+        "phase": "change",
+        "location": {
+          "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+          "line_range": [
+            20,
+            30
+          ],
+          "symbol": "CreateCounterfactualSafes1775500000000"
+        },
+        "action": "scroll-to",
+        "narration": "The down method is untouched by this revert. It still drops the counterfactual safes table when rolling back, which is the expected teardown behavior for any create-table migration.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 7,
+        "phase": "change",
+        "location": {
+          "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+          "line_range": [
+            4,
+            30
+          ],
+          "symbol": "CreateCounterfactualSafes1775500000000"
+        },
+        "action": "flick-back",
+        "narration": "Zooming out, this is a one-line diff in a single file. No other migrations, no API contracts, and no other modules are touched. The blast radius of the change itself is minimal, but the implications for certain environments are not.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 8,
+        "phase": "risk",
+        "location": {
+          "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+          "line_range": [
+            6,
+            10
+          ],
+          "symbol": "CreateCounterfactualSafes1775500000000"
+        },
+        "action": "scroll-to",
+        "narration": "The most immediate risk is that any environment still carrying the old incompatible counterfactual safes table will hit a relation already exists error the moment this migration runs. That is the exact failure mode PR 3027 was trying to prevent.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 9,
+        "phase": "risk",
+        "location": {
+          "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+          "line_range": [
+            6,
+            10
+          ],
+          "symbol": "CreateCounterfactualSafes1775500000000"
+        },
+        "action": "scroll-to",
+        "narration": "This revert does not resolve the underlying problem; it just removes the attempted fix. Reviewers should confirm whether a separate migration or a manual remediation script is planned to handle environments that have the stale table.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 10,
+        "phase": "risk",
+        "location": {
+          "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+          "line_range": [
+            6,
+            10
+          ],
+          "symbol": "CreateCounterfactualSafes1775500000000"
+        },
+        "action": "scroll-to",
+        "narration": "The cascade keyword in the dropped line was particularly dangerous because it would silently remove any dependent objects along with the table. That is a plausible reason for the revert, especially if foreign keys or views referenced the old table in any environment.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 11,
+        "phase": "risk",
+        "location": {
+          "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+          "line_range": [
+            1,
+            5
+          ],
+          "symbol": "CreateCounterfactualSafes1775500000000"
+        },
+        "action": "scroll-to",
+        "narration": "Before merging, it is worth verifying that CI and staging environments do not have the legacy table present. If they do, this migration will fail on deploy, and the team will need a manual fix or a follow-up migration to clear the stale table safely.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 12,
+        "phase": "wrap",
+        "location": {
+          "file": "migrations/1775500000000-create-counterfactual-safes.ts",
+          "line_range": [
+            4,
+            30
+          ],
+          "symbol": "CreateCounterfactualSafes1775500000000"
+        },
+        "action": "flick-back",
+        "narration": "This revert is a one-line rollback that trades the risk of cascading data loss for the risk of a migration failure on environments with a stale table, and the real fix still needs to land somewhere.",
+        "estimated_seconds": 13
+      }
+    ]
+  },
+  "markdown": "# PR Briefing — #3029: Revert \"fix: drop stale counterfactual_safes table before recreating it\"\n\n**Repo:** `safe-global/safe-client-gateway`  \n**Author:** katspaugh  \n**Branch:** `main` ← `revert-3027-fix/drop-stale-counterfactual-safes-table` (`12c3c4f`)  \n**URL:** https://github.com/safe-global/safe-client-gateway/pull/3029\n\n## Summary\n\nThis PR reverts #3027, which had added a `DROP TABLE IF EXISTS counterfactual_safes CASCADE` statement to the `up` method of the `CreateCounterfactualSafes1775500000000` TypeORM migration. The revert removes that drop statement, restoring the migration to its original form that only creates the table. The motivation for the revert is not explicitly stated in the PR but likely relates to unintended side effects of the CASCADE drop, such as data loss or failures in environments that do not have the legacy stale table. The underlying problem that #3027 attempted to solve—an orphaned legacy `counterfactual_safes` table with an incompatible schema blocking the migration—remains unresolved by this revert.\n\n## Architecture notes\n\nThe change touches a single TypeORM migration file (`migrations/1775500000000-create-counterfactual-safes.ts`) within the safe-client-gateway service. The migration's `up` method now only issues a `CREATE TABLE` for `counterfactual_safes` without first dropping any pre-existing table, meaning environments with a stale or incompatible `counterfactual_safes` table (e.g., left over from a Knex-based module) will encounter a 'relation already exists' error at migration time. No other subsystems, data flows, or API contracts are affected by this single-line revert.\n\n## Ripple risks\n\nAnalyzed 1 changed export. No untouched external callers found — all usages appear to be inside the PR diff.\n\n_Analyzed 1 file(s), 1 changed export(s), 0 uncovered callsite(s) in 1.5s._\n\n## Walkthrough outline\n\n_12 steps across 4 chapters, approximately 3 min 55s._\n\n### Why this revert happened\n\n1. **motivation** · `migrations/1775500000000-create-counterfactual-safes.ts` L1-5 `CreateCounterfactualSafes1775500000000`\n   We are looking at a revert of PR 3027, which had added a drop-table statement to this migration. The concern is that dropping the table with cascade could cause data loss or break environments that never had the legacy table in the first place.\n\n2. **motivation** · `migrations/1775500000000-create-counterfactual-safes.ts` L1-5 `CreateCounterfactualSafes1775500000000`\n   The original problem was an orphaned counterfactual safes table left over from an old Knex-based module, whose schema was incompatible with the new TypeORM migration. PR 3027 tried to fix that by dropping the stale table first, but this revert pulls that fix back out.\n\n### The migration before and after\n\n3. **change** · `migrations/1775500000000-create-counterfactual-safes.ts` L4-10 `CreateCounterfactualSafes1775500000000`\n   Here is the migration class itself. It is a standard TypeORM migration with an up method and a down method, timestamped to run in a specific order relative to other migrations.\n\n4. **change** · `migrations/1775500000000-create-counterfactual-safes.ts` L6-14 `CreateCounterfactualSafes1775500000000`\n   This is the up method after the revert. It now only issues a create table statement for counterfactual safes, with no preceding drop. The single line that PR 3027 added, the drop table if exists with cascade, is simply gone.\n\n5. **change** · `migrations/1775500000000-create-counterfactual-safes.ts` L6-8 `CreateCounterfactualSafes1775500000000`\n   To be precise, the removed line would have executed a drop table if exists counterfactual safes cascade before the create. Removing it means the up method is now a pure create, exactly as it was before PR 3027 landed.\n\n6. **change** · `migrations/1775500000000-create-counterfactual-safes.ts` L20-30 `CreateCounterfactualSafes1775500000000`\n   The down method is untouched by this revert. It still drops the counterfactual safes table when rolling back, which is the expected teardown behavior for any create-table migration.\n\n7. **change** · `migrations/1775500000000-create-counterfactual-safes.ts` L4-30 `CreateCounterfactualSafes1775500000000`\n   Zooming out, this is a one-line diff in a single file. No other migrations, no API contracts, and no other modules are touched. The blast radius of the change itself is minimal, but the implications for certain environments are not.\n\n### What can go wrong\n\n8. **risk** · `migrations/1775500000000-create-counterfactual-safes.ts` L6-10 `CreateCounterfactualSafes1775500000000`\n   The most immediate risk is that any environment still carrying the old incompatible counterfactual safes table will hit a relation already exists error the moment this migration runs. That is the exact failure mode PR 3027 was trying to prevent.\n\n9. **risk** · `migrations/1775500000000-create-counterfactual-safes.ts` L6-10 `CreateCounterfactualSafes1775500000000`\n   This revert does not resolve the underlying problem; it just removes the attempted fix. Reviewers should confirm whether a separate migration or a manual remediation script is planned to handle environments that have the stale table.\n\n10. **risk** · `migrations/1775500000000-create-counterfactual-safes.ts` L6-10 `CreateCounterfactualSafes1775500000000`\n   The cascade keyword in the dropped line was particularly dangerous because it would silently remove any dependent objects along with the table. That is a plausible reason for the revert, especially if foreign keys or views referenced the old table in any environment.\n\n11. **risk** · `migrations/1775500000000-create-counterfactual-safes.ts` L1-5 `CreateCounterfactualSafes1775500000000`\n   Before merging, it is worth verifying that CI and staging environments do not have the legacy table present. If they do, this migration will fail on deploy, and the team will need a manual fix or a follow-up migration to clear the stale table safely.\n\n### Bottom line\n\n12. **wrap** · `migrations/1775500000000-create-counterfactual-safes.ts` L4-30 `CreateCounterfactualSafes1775500000000`\n   This revert is a one-line rollback that trades the risk of cascading data loss for the risk of a migration failure on environments with a stale table, and the real fix still needs to land somewhere.\n\n## Reviewer checklist\n\n- [ ] Confirm that no production or staging environment currently has a stale `counterfactual_safes` table with an incompatible schema that would cause the `CREATE TABLE` to fail.\n- [ ] Verify that a follow-up plan or separate migration exists to handle environments where the legacy orphaned table may still be present.\n- [ ] Check that the `down` migration method is still correct and consistent with the reverted `up` method.\n- [ ] Ensure CI/CD pipelines run against a clean database state so the missing drop statement does not silently mask migration failures in test environments.\n- [ ] Confirm the reason for reverting #3027 is documented (e.g., in the PR description or a linked issue) so the team understands the trade-off being made.\n\n## File-by-file\n\n### `migrations/1775500000000-create-counterfactual-safes.ts`\n\nRemoved the `DROP TABLE IF EXISTS counterfactual_safes CASCADE` statement from the `up` migration in `CreateCounterfactualSafes1775500000000`, reverting PR #3027's fix that dropped an orphaned legacy table before recreating it.\n\n_Likely reverted because the drop-before-create approach caused issues (e.g., data loss, migration failures in environments without the stale table, or unintended side effects from CASCADE)._\n\n**Risks:**\n- If any environment still has the old incompatible `counterfactual_safes` table from the Knex module, the `CREATE TABLE` will now fail with a 'relation already exists' error\n- Reverting means the original problem (orphaned table with incompatible schema blocking migration) is unresolved for affected deployments\n- Check whether a separate migration or manual remediation step is planned to handle the stale table scenario\n- Verify that CI/CD and staging environments do not have the legacy table present before merging\n\n---\n_Generated by prbrief • model: claude-sonnet-4-6 • 3 LLM calls • $0.06 • 43.4s_",
+  "files": {
+    "migrations/1775500000000-create-counterfactual-safes.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport type { MigrationInterface, QueryRunner } from 'typeorm';\n\nexport class CreateCounterfactualSafes1775500000000 implements MigrationInterface {\n  public async up(queryRunner: QueryRunner): Promise<void> {\n    await queryRunner.query(\n      `CREATE TABLE counterfactual_safes (\n        id SERIAL NOT NULL,\n        creator_id INTEGER,\n        chain_id VARCHAR(78) NOT NULL,\n        address VARCHAR(42) NOT NULL,\n        factory_address VARCHAR(42) NOT NULL,\n        master_copy VARCHAR(42) NOT NULL,\n        salt_nonce VARCHAR(78) NOT NULL,\n        safe_version VARCHAR(20) NOT NULL,\n        threshold INTEGER NOT NULL,\n        owners JSONB NOT NULL,\n        fallback_handler VARCHAR(42),\n        setup_to VARCHAR(42),\n        setup_data TEXT NOT NULL,\n        payment_token VARCHAR(42),\n        payment NUMERIC,\n        payment_receiver VARCHAR(42),\n        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),\n        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),\n        CONSTRAINT PK_CFS_id PRIMARY KEY (id),\n        CONSTRAINT UQ_CFS_chainId_address UNIQUE (chain_id, address),\n        CONSTRAINT FK_CFS_creator_id FOREIGN KEY (creator_id) REFERENCES users(id) ON DELETE SET NULL\n      );\n      CREATE INDEX IDX_CFS_creator_id ON counterfactual_safes(creator_id);`,\n    );\n    await queryRunner.query(\n      `CREATE TRIGGER update_counterfactual_safes_updated_at\n        BEFORE UPDATE ON counterfactual_safes\n        FOR EACH ROW EXECUTE PROCEDURE update_updated_at();`,\n    );\n  }\n\n  public async down(queryRunner: QueryRunner): Promise<void> {\n    await queryRunner.query(\n      `DROP TABLE IF EXISTS counterfactual_safes CASCADE;`,\n    );\n  }\n}\n"
+  },
+  "has_audio": false,
+  "has_video": false,
+  "has_thumbnail": false,
+  "pr_url": "https://github.com/safe-global/safe-client-gateway/pull/3029",
+  "is_sample": false,
+  "sample_id": null
+}
