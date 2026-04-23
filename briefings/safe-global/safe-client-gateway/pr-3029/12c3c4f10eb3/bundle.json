@@ -487,9 +487,13 @@
   "files": {
     "migrations/1775500000000-create-counterfactual-safes.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport type { MigrationInterface, QueryRunner } from 'typeorm';\n\nexport class CreateCounterfactualSafes1775500000000 implements MigrationInterface {\n  public async up(queryRunner: QueryRunner): Promise<void> {\n    await queryRunner.query(\n      `CREATE TABLE counterfactual_safes (\n        id SERIAL NOT NULL,\n        creator_id INTEGER,\n        chain_id VARCHAR(78) NOT NULL,\n        address VARCHAR(42) NOT NULL,\n        factory_address VARCHAR(42) NOT NULL,\n        master_copy VARCHAR(42) NOT NULL,\n        salt_nonce VARCHAR(78) NOT NULL,\n        safe_version VARCHAR(20) NOT NULL,\n        threshold INTEGER NOT NULL,\n        owners JSONB NOT NULL,\n        fallback_handler VARCHAR(42),\n        setup_to VARCHAR(42),\n        setup_data TEXT NOT NULL,\n        payment_token VARCHAR(42),\n        payment NUMERIC,\n        payment_receiver VARCHAR(42),\n        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),\n        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),\n        CONSTRAINT PK_CFS_id PRIMARY KEY (id),\n        CONSTRAINT UQ_CFS_chainId_address UNIQUE (chain_id, address),\n        CONSTRAINT FK_CFS_creator_id FOREIGN KEY (creator_id) REFERENCES users(id) ON DELETE SET NULL\n      );\n      CREATE INDEX IDX_CFS_creator_id ON counterfactual_safes(creator_id);`,\n    );\n    await queryRunner.query(\n      `CREATE TRIGGER update_counterfactual_safes_updated_at\n        BEFORE UPDATE ON counterfactual_safes\n        FOR EACH ROW EXECUTE PROCEDURE update_updated_at();`,\n    );\n  }\n\n  public async down(queryRunner: QueryRunner): Promise<void> {\n    await queryRunner.query(\n      `DROP TABLE IF EXISTS counterfactual_safes CASCADE;`,\n    );\n  }\n}\n"
   },
-  "has_audio": false,
-  "has_video": false,
-  "has_thumbnail": false,
+  "has_audio": true,
+  "has_video": true,
+  "has_thumbnail": true,
+  "audio_url": "https://github.com/katspaugh/popcorn-review-artifacts/releases/download/prbrief-safe-global-safe-client-gateway-pr-3029-12c3c4f10eb3/audio.mp3",
+  "audio_manifest_url": "https://github.com/katspaugh/popcorn-review-artifacts/releases/download/prbrief-safe-global-safe-client-gateway-pr-3029-12c3c4f10eb3/audio.json",
+  "video_url": "https://github.com/katspaugh/popcorn-review-artifacts/releases/download/prbrief-safe-global-safe-client-gateway-pr-3029-12c3c4f10eb3/video.mp4",
+  "thumbnail_url": "https://github.com/katspaugh/popcorn-review-artifacts/releases/download/prbrief-safe-global-safe-client-gateway-pr-3029-12c3c4f10eb3/thumbnail.png",
   "pr_url": "https://github.com/safe-global/safe-client-gateway/pull/3029",
   "is_sample": false,
   "sample_id": null
