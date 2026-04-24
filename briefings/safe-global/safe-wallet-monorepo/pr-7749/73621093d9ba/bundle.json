@@ -1,0 +1,875 @@
+{
+  "slug": "safe-global/safe-wallet-monorepo",
+  "pr_number": 7749,
+  "head_sha": "73621093d9bad73f9ca854821fe3155af0895e8b",
+  "head_sha_short": "73621093d9ba",
+  "pr_title": "fix(web): cache no-ENS resolution results to prevent repeated lookups",
+  "created_at": 1777048044606,
+  "briefing": {
+    "id": 17,
+    "pr": {
+      "repo_slug": "safe-global/safe-wallet-monorepo",
+      "number": 7749
+    },
+    "head_sha": "73621093d9bad73f9ca854821fe3155af0895e8b",
+    "base_sha": "25b3ac29f3e7c14e8186eaebbb44233c8afb0ed7",
+    "status": "done",
+    "model": "claude-sonnet-4-6",
+    "cost_cents": 9,
+    "latency_ms": 72453,
+    "summary_md": "This PR fixes a performance issue in `useAddressResolver` where addresses with no ENS reverse record were never cached, causing a fresh Infura/RPC provider call on every component mount. The fix changes the module-level cache value type from `Record<string, string>` to `Record<string, string | null>`, uses `null` as a sentinel for 'no ENS name found', and switches the cache-hit check from truthiness to the `in` operator so null entries short-circuit provider calls. The previous `useEffect`-based cache write (which only fired on positive results) is replaced with an inline write inside `useAsync` that always stores the result, including `null`. A new unit test verifies that `lookupAddress` is called exactly once across two mounts for an address with no ENS name.",
+    "file_summaries": [
+      {
+        "path": "apps/web/src/hooks/__tests__/useAddressResolver.test.ts",
+        "what_changed": "A new test `caches no-ENS results so repeated lookups do not hit the provider` is added that mounts `useAddressResolver` twice for an address where `lookupAddress` resolves to `undefined`, asserting `lookupMock` is called exactly once across both mounts.",
+        "why_it_matters": "Verifies the negative-result caching behavior introduced in the implementation change, ensuring the provider is not called redundantly for addresses with no ENS name.",
+        "risk_hints": [
+          "Test relies on module-level cache state persisting between the two `renderHook` calls — if test isolation resets the cache (e.g., via jest module reset), the assertion `toHaveBeenCalledTimes(1)` could give a false positive",
+          "No assertion that `resolving` is `false` after the first mount completes — only checked on second mount; a race could mask bugs",
+          "Does not verify behavior after a cache invalidation or page-level reset scenario"
+        ]
+      },
+      {
+        "path": "apps/web/src/hooks/useAddressResolver.ts",
+        "what_changed": "Changed `cache` value type from `Record<string, string>` to `Record<string, string | null>`, replaced the `useEffect`-based cache write (positive results only) with an inline `await`+write inside `useAsync` that stores `null` for no-ENS results, and changed the cache-hit check from truthiness to `in` operator key-presence.",
+        "why_it_matters": "Caches negative ENS lookup results so repeated mounts for addresses with no ENS name skip the provider call instead of hitting Infura every time.",
+        "risk_hints": [
+          "Transient RPC errors in lookupAddress return undefined and are now cached as null, permanently suppressing retries for the session",
+          "useAsync dependency array includes ethersProvider — if provider reference changes, cache is bypassed and a fresh lookup fires even for already-cached addresses",
+          "Cache is module-level and never invalidated; if an address gains an ENS name mid-session the stale null will be served until page reload",
+          "The async function inside useAsync now writes to the module-level cache as a side effect, which could cause issues if useAsync calls the function multiple times concurrently for the same address (race condition writing cache[chainId][debouncedValue] twice)"
+        ]
+      }
+    ],
+    "architecture_delta": {
+      "architecture_notes": "The change is confined to the `useAddressResolver` hook and its test file in `apps/web/src/hooks/`. The module-level in-memory cache is keyed by `chainId × address` and is shared across all consumers (address book, tx builder, send flow, owner lists) for the duration of a browser session. No persistence layer, API contract, or feature flag is touched. The ENS service (`services/ens/index.ts#lookupAddress`) is unchanged, meaning transient RPC errors that return `undefined` are now indistinguishable from confirmed 'no ENS' results and will be cached as `null` for the session.",
+      "reviewer_checklist": [
+        "Verify that the `in` operator cache-hit check correctly handles the case where `cache[chainId]` is undefined (i.e., no entry for the chain yet) to avoid a TypeError.",
+        "Confirm that a transient RPC error from `lookupAddress` returning `undefined` being cached as `null` is an acceptable trade-off, or that a follow-up issue is filed to distinguish errors from confirmed no-ENS results.",
+        "Check whether `useAsync` can invoke its async callback multiple times concurrently (e.g., on rapid re-renders before the first call resolves), which could cause a race condition writing `cache[chainId][address]` twice with potentially different values.",
+        "Ensure the new unit test does not rely on implicit module-level cache state leaking between test cases — confirm `jest.resetModules()` or equivalent isolation is not needed to keep the test deterministic.",
+        "Manually test that an address which gains an ENS name mid-session (or where the first lookup was a transient failure) does not serve a stale `null` from cache, and decide if a cache TTL or invalidation mechanism is needed."
+      ]
+    },
+    "tour": {
+      "chapters": [
+        {
+          "title": "Why this change",
+          "step_range": [
+            1,
+            2
+          ]
+        },
+        {
+          "title": "The caching fix",
+          "step_range": [
+            3,
+            9
+          ]
+        },
+        {
+          "title": "The test that proves it",
+          "step_range": [
+            10,
+            13
+          ]
+        },
+        {
+          "title": "What can go wrong",
+          "step_range": [
+            14,
+            17
+          ]
+        },
+        {
+          "title": "The bottom line",
+          "step_range": [
+            18,
+            18
+          ]
+        }
+      ],
+      "total_seconds": 235,
+      "steps": [
+        {
+          "step": 1,
+          "phase": "motivation",
+          "location": {
+            "file": "apps/web/src/hooks/useAddressResolver.ts",
+            "line_range": [
+              1,
+              15
+            ],
+            "symbol": "useAddressResolver"
+          },
+          "action": "open",
+          "narration": "Here is the hook that resolves Ethereum addresses to ENS names across the whole app — address book, send flow, owner lists, all of it. Before this PR, every time a component mounted for an address with no ENS name, it fired a fresh call to the RPC provider. No caching of negative results meant Infura took a hit on every re-mount.",
+          "estimated_seconds": 15
+        },
+        {
+          "step": 2,
+          "phase": "motivation",
+          "location": {
+            "file": "apps/web/src/hooks/useAddressResolver.ts",
+            "line_range": [
+              1,
+              15
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "The flow before this fix: cache only stored strings, so a null or undefined result from lookup address was never written. The next mount saw no cache entry and called the provider again. This diagram shows exactly how the before and after differ.",
+          "estimated_seconds": 15,
+          "diagram": {
+            "kind": "flowchart",
+            "title": "Before and after negative result caching",
+            "mermaid": "flowchart TB\n  subgraph Before\n    A1[Hook mount] --> B1{Cache hit?}\n    B1 -->|string cached| C1[Return cached]\n    B1 -->|missing or null| D1[Call lookupAddress]\n    D1 --> E1{Result?}\n    E1 -->|string| F1[Write cache, return]\n    E1 -->|undefined| G1[Return undefined, no write]\n  end\n  subgraph After\n    A2[Hook mount] --> B2{Key in cache?}\n    B2 -->|yes| C2[Return cached value or undefined]\n    B2 -->|no| D2[Call lookupAddress]\n    D2 --> F2[Write null or string, return]\n  end"
+          }
+        },
+        {
+          "step": 3,
+          "phase": "change",
+          "location": {
+            "file": "apps/web/src/hooks/useAddressResolver.ts",
+            "line_range": [
+              1,
+              5
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "At the very top of the file, the module-level cache type has been widened. The inner record now maps address strings to either a string or null, where null is the sentinel meaning no ENS name was found. This single type change is what makes the rest of the fix possible.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 4,
+          "phase": "change",
+          "location": {
+            "file": "apps/web/src/hooks/useAddressResolver.ts",
+            "line_range": [
+              13,
+              22
+            ],
+            "symbol": "useAddressResolver"
+          },
+          "action": "scroll-to",
+          "narration": "Inside the hook, the cache hit check has changed from a truthiness test to the in operator. Previously, a cached null would have been falsy and fallen through to a provider call. Now, if the key exists at all — whether the value is a string or null — the hook returns immediately without touching the network.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 5,
+          "phase": "change",
+          "location": {
+            "file": "apps/web/src/hooks/useAddressResolver.ts",
+            "line_range": [
+              23,
+              35
+            ],
+            "symbol": "useAddressResolver"
+          },
+          "action": "scroll-to",
+          "narration": "The actual lookup now happens inline with an await inside the async callback passed to use async. After the provider responds, the result is written to the cache immediately — whether it came back as a name string or as undefined, which gets stored as null. This replaces the old use effect that only wrote on positive results.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 6,
+          "phase": "change",
+          "location": {
+            "file": "apps/web/src/hooks/useAddressResolver.ts",
+            "line_range": [
+              35,
+              45
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "The return value from the async callback converts that cached null back to undefined before handing it to callers, so the external API of the hook is unchanged. Consumers still receive either a name string or undefined — they never see null directly.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 7,
+          "phase": "change",
+          "location": {
+            "file": "apps/web/src/hooks/useAddressResolver.ts",
+            "line_range": [
+              13,
+              45
+            ],
+            "symbol": "useAddressResolver"
+          },
+          "action": "flick-back",
+          "narration": "Stepping back to see the whole hook at once: the cache is keyed by chain ID then address, so each chain gets its own namespace. The ethers provider is in the use async dependency array, meaning a provider reference change will bypass the cache and trigger a fresh lookup — which is correct behavior when switching networks.",
+          "callouts": [
+            {
+              "file": "apps/web/src/hooks/useAddressResolver.ts",
+              "line": 13,
+              "note": "dependency array includes ethersProvider — provider swap clears the short-circuit"
+            }
+          ],
+          "estimated_seconds": 14
+        },
+        {
+          "step": 8,
+          "phase": "change",
+          "location": {
+            "file": "apps/web/src/hooks/useAddressResolver.ts",
+            "line_range": [
+              1,
+              5
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "The cache itself is module-level, meaning it lives for the entire browser session and is shared across every component that imports this hook. There is no explicit invalidation path — a page reload is the only reset. That is intentional for this PR, keeping the fix minimal.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 9,
+          "phase": "change",
+          "location": {
+            "file": "apps/web/src/hooks/useAddressResolver.ts",
+            "line_range": [
+              13,
+              45
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "One subtle point: the address book name lookup still short-circuits ENS resolution entirely, upstream of this cache. So the new null-caching path only activates when no address book entry exists and the chain has the domain lookup feature enabled.",
+          "callouts": [
+            {
+              "file": "apps/web/src/hooks/useAddressResolver.ts",
+              "line": 13,
+              "note": "address-book override happens before the cache check — ENS cache is never consulted for known contacts"
+            }
+          ],
+          "estimated_seconds": 13
+        },
+        {
+          "step": 10,
+          "phase": "ripple",
+          "location": {
+            "file": "apps/web/src/hooks/__tests__/useAddressResolver.test.ts",
+            "line_range": [
+              1,
+              20
+            ]
+          },
+          "action": "open",
+          "narration": "Now let us look at the test file. A new test case was added specifically for the negative-result scenario. It sets up lookup address to resolve to undefined — simulating an address with no ENS reverse record — then mounts the hook twice.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 11,
+          "phase": "ripple",
+          "location": {
+            "file": "apps/web/src/hooks/__tests__/useAddressResolver.test.ts",
+            "line_range": [
+              20,
+              45
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "After both mounts complete, the test asserts that the lookup mock was called exactly once. That single assertion is the whole point: the second mount must have hit the cache and skipped the provider entirely. It also checks that the resolving flag is false on the second mount, confirming the hook settled synchronously from cache.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 12,
+          "phase": "ripple",
+          "location": {
+            "file": "apps/web/src/hooks/__tests__/useAddressResolver.test.ts",
+            "line_range": [
+              45,
+              60
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "The test relies on the module-level cache persisting between the two render hook calls within the same test run. This works because Jest does not reset module state between calls inside a single test — but it does mean test ordering matters if the cache were ever pre-populated by an earlier test.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 13,
+          "phase": "ripple",
+          "location": {
+            "file": "apps/web/src/hooks/__tests__/useAddressResolver.test.ts",
+            "line_range": [
+              1,
+              60
+            ]
+          },
+          "action": "flick-back",
+          "narration": "The existing positive-result tests are untouched, so we know the happy path — where lookup address returns a real name — still writes to cache and returns correctly. The new test only adds coverage for the previously unhandled empty case.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 14,
+          "phase": "risk",
+          "location": {
+            "file": "apps/web/src/hooks/useAddressResolver.ts",
+            "line_range": [
+              23,
+              35
+            ]
+          },
+          "action": "open",
+          "narration": "Here is the first gotcha worth reviewer attention. The ENS service's lookup address swallows transient RPC errors and returns undefined. With this change, a network blip during the first mount gets cached as null — permanently suppressing retries for the rest of the session. The old behavior retried on every mount; this PR trades retry resilience for fewer calls.",
+          "callouts": [
+            {
+              "file": "apps/web/src/services/ens/index.ts",
+              "line": 1,
+              "note": "lookupAddress swallows errors and returns undefined — indistinguishable from confirmed no-ENS"
+            }
+          ],
+          "estimated_seconds": 15
+        },
+        {
+          "step": 15,
+          "phase": "risk",
+          "location": {
+            "file": "apps/web/src/hooks/useAddressResolver.ts",
+            "line_range": [
+              23,
+              35
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "Second risk: the async callback inside use async writes to the module-level cache as a side effect. If use async ever calls that function concurrently for the same address — say, due to rapid re-renders before the first await resolves — two writes race to the same cache slot. In practice this is unlikely, but it is worth noting for future refactors.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 16,
+          "phase": "risk",
+          "location": {
+            "file": "apps/web/src/hooks/useAddressResolver.ts",
+            "line_range": [
+              1,
+              12
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "Third risk: the cache has no time-to-live and no invalidation. If an address gains an ENS name mid-session — say, a user registers one in another tab — the stale null entry will be served until the page reloads. For most users this is acceptable, but it is a known limitation of the in-memory approach.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 17,
+          "phase": "risk",
+          "location": {
+            "file": "apps/web/src/hooks/useAddressResolver.ts",
+            "line_range": [
+              13,
+              22
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "Fourth: the ethers provider reference is in the dependency array, so switching chains correctly bypasses the cache and fires a fresh lookup. But if the provider object is recreated on every render for some reason, the cache would be bypassed on every mount too — defeating the fix. Worth confirming provider stability in the broader app setup.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 18,
+          "phase": "wrap",
+          "location": {
+            "file": "apps/web/src/hooks/useAddressResolver.ts",
+            "line_range": [
+              1,
+              45
+            ],
+            "symbol": "useAddressResolver"
+          },
+          "action": "flick-back",
+          "narration": "Bottom line: a two-line logic change — null as sentinel, in operator for presence check — stops the app from hammering the RPC provider for every address that has no ENS name, with a clear trade-off that transient errors are now silently cached for the session.",
+          "estimated_seconds": 13
+        }
+      ]
+    },
+    "created_at": 1777048044606
+  },
+  "tour": {
+    "chapters": [
+      {
+        "title": "Why this change",
+        "step_range": [
+          1,
+          2
+        ]
+      },
+      {
+        "title": "The caching fix",
+        "step_range": [
+          3,
+          9
+        ]
+      },
+      {
+        "title": "The test that proves it",
+        "step_range": [
+          10,
+          13
+        ]
+      },
+      {
+        "title": "What can go wrong",
+        "step_range": [
+          14,
+          17
+        ]
+      },
+      {
+        "title": "The bottom line",
+        "step_range": [
+          18,
+          18
+        ]
+      }
+    ],
+    "total_seconds": 235,
+    "steps": [
+      {
+        "step": 1,
+        "phase": "motivation",
+        "location": {
+          "file": "apps/web/src/hooks/useAddressResolver.ts",
+          "line_range": [
+            1,
+            15
+          ],
+          "symbol": "useAddressResolver"
+        },
+        "action": "open",
+        "narration": "Here is the hook that resolves Ethereum addresses to ENS names across the whole app — address book, send flow, owner lists, all of it. Before this PR, every time a component mounted for an address with no ENS name, it fired a fresh call to the RPC provider. No caching of negative results meant Infura took a hit on every re-mount.",
+        "estimated_seconds": 15
+      },
+      {
+        "step": 2,
+        "phase": "motivation",
+        "location": {
+          "file": "apps/web/src/hooks/useAddressResolver.ts",
+          "line_range": [
+            1,
+            15
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "The flow before this fix: cache only stored strings, so a null or undefined result from lookup address was never written. The next mount saw no cache entry and called the provider again. This diagram shows exactly how the before and after differ.",
+        "estimated_seconds": 15,
+        "diagram": {
+          "kind": "flowchart",
+          "title": "Before and after negative result caching",
+          "mermaid": "flowchart TB\n  subgraph Before\n    A1[Hook mount] --> B1{Cache hit?}\n    B1 -->|string cached| C1[Return cached]\n    B1 -->|missing or null| D1[Call lookupAddress]\n    D1 --> E1{Result?}\n    E1 -->|string| F1[Write cache, return]\n    E1 -->|undefined| G1[Return undefined, no write]\n  end\n  subgraph After\n    A2[Hook mount] --> B2{Key in cache?}\n    B2 -->|yes| C2[Return cached value or undefined]\n    B2 -->|no| D2[Call lookupAddress]\n    D2 --> F2[Write null or string, return]\n  end"
+        }
+      },
+      {
+        "step": 3,
+        "phase": "change",
+        "location": {
+          "file": "apps/web/src/hooks/useAddressResolver.ts",
+          "line_range": [
+            1,
+            5
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "At the very top of the file, the module-level cache type has been widened. The inner record now maps address strings to either a string or null, where null is the sentinel meaning no ENS name was found. This single type change is what makes the rest of the fix possible.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 4,
+        "phase": "change",
+        "location": {
+          "file": "apps/web/src/hooks/useAddressResolver.ts",
+          "line_range": [
+            13,
+            22
+          ],
+          "symbol": "useAddressResolver"
+        },
+        "action": "scroll-to",
+        "narration": "Inside the hook, the cache hit check has changed from a truthiness test to the in operator. Previously, a cached null would have been falsy and fallen through to a provider call. Now, if the key exists at all — whether the value is a string or null — the hook returns immediately without touching the network.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 5,
+        "phase": "change",
+        "location": {
+          "file": "apps/web/src/hooks/useAddressResolver.ts",
+          "line_range": [
+            23,
+            35
+          ],
+          "symbol": "useAddressResolver"
+        },
+        "action": "scroll-to",
+        "narration": "The actual lookup now happens inline with an await inside the async callback passed to use async. After the provider responds, the result is written to the cache immediately — whether it came back as a name string or as undefined, which gets stored as null. This replaces the old use effect that only wrote on positive results.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 6,
+        "phase": "change",
+        "location": {
+          "file": "apps/web/src/hooks/useAddressResolver.ts",
+          "line_range": [
+            35,
+            45
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "The return value from the async callback converts that cached null back to undefined before handing it to callers, so the external API of the hook is unchanged. Consumers still receive either a name string or undefined — they never see null directly.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 7,
+        "phase": "change",
+        "location": {
+          "file": "apps/web/src/hooks/useAddressResolver.ts",
+          "line_range": [
+            13,
+            45
+          ],
+          "symbol": "useAddressResolver"
+        },
+        "action": "flick-back",
+        "narration": "Stepping back to see the whole hook at once: the cache is keyed by chain ID then address, so each chain gets its own namespace. The ethers provider is in the use async dependency array, meaning a provider reference change will bypass the cache and trigger a fresh lookup — which is correct behavior when switching networks.",
+        "callouts": [
+          {
+            "file": "apps/web/src/hooks/useAddressResolver.ts",
+            "line": 13,
+            "note": "dependency array includes ethersProvider — provider swap clears the short-circuit"
+          }
+        ],
+        "estimated_seconds": 14
+      },
+      {
+        "step": 8,
+        "phase": "change",
+        "location": {
+          "file": "apps/web/src/hooks/useAddressResolver.ts",
+          "line_range": [
+            1,
+            5
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "The cache itself is module-level, meaning it lives for the entire browser session and is shared across every component that imports this hook. There is no explicit invalidation path — a page reload is the only reset. That is intentional for this PR, keeping the fix minimal.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 9,
+        "phase": "change",
+        "location": {
+          "file": "apps/web/src/hooks/useAddressResolver.ts",
+          "line_range": [
+            13,
+            45
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "One subtle point: the address book name lookup still short-circuits ENS resolution entirely, upstream of this cache. So the new null-caching path only activates when no address book entry exists and the chain has the domain lookup feature enabled.",
+        "callouts": [
+          {
+            "file": "apps/web/src/hooks/useAddressResolver.ts",
+            "line": 13,
+            "note": "address-book override happens before the cache check — ENS cache is never consulted for known contacts"
+          }
+        ],
+        "estimated_seconds": 13
+      },
+      {
+        "step": 10,
+        "phase": "ripple",
+        "location": {
+          "file": "apps/web/src/hooks/__tests__/useAddressResolver.test.ts",
+          "line_range": [
+            1,
+            20
+          ]
+        },
+        "action": "open",
+        "narration": "Now let us look at the test file. A new test case was added specifically for the negative-result scenario. It sets up lookup address to resolve to undefined — simulating an address with no ENS reverse record — then mounts the hook twice.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 11,
+        "phase": "ripple",
+        "location": {
+          "file": "apps/web/src/hooks/__tests__/useAddressResolver.test.ts",
+          "line_range": [
+            20,
+            45
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "After both mounts complete, the test asserts that the lookup mock was called exactly once. That single assertion is the whole point: the second mount must have hit the cache and skipped the provider entirely. It also checks that the resolving flag is false on the second mount, confirming the hook settled synchronously from cache.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 12,
+        "phase": "ripple",
+        "location": {
+          "file": "apps/web/src/hooks/__tests__/useAddressResolver.test.ts",
+          "line_range": [
+            45,
+            60
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "The test relies on the module-level cache persisting between the two render hook calls within the same test run. This works because Jest does not reset module state between calls inside a single test — but it does mean test ordering matters if the cache were ever pre-populated by an earlier test.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 13,
+        "phase": "ripple",
+        "location": {
+          "file": "apps/web/src/hooks/__tests__/useAddressResolver.test.ts",
+          "line_range": [
+            1,
+            60
+          ]
+        },
+        "action": "flick-back",
+        "narration": "The existing positive-result tests are untouched, so we know the happy path — where lookup address returns a real name — still writes to cache and returns correctly. The new test only adds coverage for the previously unhandled empty case.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 14,
+        "phase": "risk",
+        "location": {
+          "file": "apps/web/src/hooks/useAddressResolver.ts",
+          "line_range": [
+            23,
+            35
+          ]
+        },
+        "action": "open",
+        "narration": "Here is the first gotcha worth reviewer attention. The ENS service's lookup address swallows transient RPC errors and returns undefined. With this change, a network blip during the first mount gets cached as null — permanently suppressing retries for the rest of the session. The old behavior retried on every mount; this PR trades retry resilience for fewer calls.",
+        "callouts": [
+          {
+            "file": "apps/web/src/services/ens/index.ts",
+            "line": 1,
+            "note": "lookupAddress swallows errors and returns undefined — indistinguishable from confirmed no-ENS"
+          }
+        ],
+        "estimated_seconds": 15
+      },
+      {
+        "step": 15,
+        "phase": "risk",
+        "location": {
+          "file": "apps/web/src/hooks/useAddressResolver.ts",
+          "line_range": [
+            23,
+            35
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "Second risk: the async callback inside use async writes to the module-level cache as a side effect. If use async ever calls that function concurrently for the same address — say, due to rapid re-renders before the first await resolves — two writes race to the same cache slot. In practice this is unlikely, but it is worth noting for future refactors.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 16,
+        "phase": "risk",
+        "location": {
+          "file": "apps/web/src/hooks/useAddressResolver.ts",
+          "line_range": [
+            1,
+            12
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "Third risk: the cache has no time-to-live and no invalidation. If an address gains an ENS name mid-session — say, a user registers one in another tab — the stale null entry will be served until the page reloads. For most users this is acceptable, but it is a known limitation of the in-memory approach.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 17,
+        "phase": "risk",
+        "location": {
+          "file": "apps/web/src/hooks/useAddressResolver.ts",
+          "line_range": [
+            13,
+            22
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "Fourth: the ethers provider reference is in the dependency array, so switching chains correctly bypasses the cache and fires a fresh lookup. But if the provider object is recreated on every render for some reason, the cache would be bypassed on every mount too — defeating the fix. Worth confirming provider stability in the broader app setup.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 18,
+        "phase": "wrap",
+        "location": {
+          "file": "apps/web/src/hooks/useAddressResolver.ts",
+          "line_range": [
+            1,
+            45
+          ],
+          "symbol": "useAddressResolver"
+        },
+        "action": "flick-back",
+        "narration": "Bottom line: a two-line logic change — null as sentinel, in operator for presence check — stops the app from hammering the RPC provider for every address that has no ENS name, with a clear trade-off that transient errors are now silently cached for the session.",
+        "estimated_seconds": 13
+      }
+    ]
+  },
+  "markdown": "# PR Briefing — #7749: fix(web): cache no-ENS resolution results to prevent repeated lookups\n\n**Repo:** `safe-global/safe-wallet-monorepo`  \n**Author:** katspaugh  \n**Branch:** `dev` ← `fix/wa-2092-cache-no-ens-addresses` (`7362109`)  \n**URL:** https://github.com/safe-global/safe-wallet-monorepo/pull/7749\n\n## Summary\n\nThis PR fixes a performance issue in `useAddressResolver` where addresses with no ENS reverse record were never cached, causing a fresh Infura/RPC provider call on every component mount. The fix changes the module-level cache value type from `Record<string, string>` to `Record<string, string | null>`, uses `null` as a sentinel for 'no ENS name found', and switches the cache-hit check from truthiness to the `in` operator so null entries short-circuit provider calls. The previous `useEffect`-based cache write (which only fired on positive results) is replaced with an inline write inside `useAsync` that always stores the result, including `null`. A new unit test verifies that `lookupAddress` is called exactly once across two mounts for an address with no ENS name.\n\n## Architecture notes\n\nThe change is confined to the `useAddressResolver` hook and its test file in `apps/web/src/hooks/`. The module-level in-memory cache is keyed by `chainId × address` and is shared across all consumers (address book, tx builder, send flow, owner lists) for the duration of a browser session. No persistence layer, API contract, or feature flag is touched. The ENS service (`services/ens/index.ts#lookupAddress`) is unchanged, meaning transient RPC errors that return `undefined` are now indistinguishable from confirmed 'no ENS' results and will be cached as `null` for the session.\n\n## Ripple risks\n\nAnalyzed 1 changed export. No untouched external callers found — all usages appear to be inside the PR diff.\n\n_Analyzed 2 file(s), 1 changed export(s), 0 uncovered callsite(s) in 1.6s._\n\n## Walkthrough outline\n\n_18 steps across 5 chapters, approximately 4 min 55s._\n\n### Why this change\n\n1. **motivation** · `apps/web/src/hooks/useAddressResolver.ts` L1-15 `useAddressResolver`\n   Here is the hook that resolves Ethereum addresses to ENS names across the whole app — address book, send flow, owner lists, all of it. Before this PR, every time a component mounted for an address with no ENS name, it fired a fresh call to the RPC provider. No caching of negative results meant Infura took a hit on every re-mount.\n\n2. **motivation** · `apps/web/src/hooks/useAddressResolver.ts` L1-15\n   The flow before this fix: cache only stored strings, so a null or undefined result from lookup address was never written. The next mount saw no cache entry and called the provider again. This diagram shows exactly how the before and after differ.\n\n### The caching fix\n\n3. **change** · `apps/web/src/hooks/useAddressResolver.ts` L1-5\n   At the very top of the file, the module-level cache type has been widened. The inner record now maps address strings to either a string or null, where null is the sentinel meaning no ENS name was found. This single type change is what makes the rest of the fix possible.\n\n4. **change** · `apps/web/src/hooks/useAddressResolver.ts` L13-22 `useAddressResolver`\n   Inside the hook, the cache hit check has changed from a truthiness test to the in operator. Previously, a cached null would have been falsy and fallen through to a provider call. Now, if the key exists at all — whether the value is a string or null — the hook returns immediately without touching the network.\n\n5. **change** · `apps/web/src/hooks/useAddressResolver.ts` L23-35 `useAddressResolver`\n   The actual lookup now happens inline with an await inside the async callback passed to use async. After the provider responds, the result is written to the cache immediately — whether it came back as a name string or as undefined, which gets stored as null. This replaces the old use effect that only wrote on positive results.\n\n6. **change** · `apps/web/src/hooks/useAddressResolver.ts` L35-45\n   The return value from the async callback converts that cached null back to undefined before handing it to callers, so the external API of the hook is unchanged. Consumers still receive either a name string or undefined — they never see null directly.\n\n7. **change** · `apps/web/src/hooks/useAddressResolver.ts` L13-45 `useAddressResolver`\n   Stepping back to see the whole hook at once: the cache is keyed by chain ID then address, so each chain gets its own namespace. The ethers provider is in the use async dependency array, meaning a provider reference change will bypass the cache and trigger a fresh lookup — which is correct behavior when switching networks.\n\n8. **change** · `apps/web/src/hooks/useAddressResolver.ts` L1-5\n   The cache itself is module-level, meaning it lives for the entire browser session and is shared across every component that imports this hook. There is no explicit invalidation path — a page reload is the only reset. That is intentional for this PR, keeping the fix minimal.\n\n9. **change** · `apps/web/src/hooks/useAddressResolver.ts` L13-45\n   One subtle point: the address book name lookup still short-circuits ENS resolution entirely, upstream of this cache. So the new null-caching path only activates when no address book entry exists and the chain has the domain lookup feature enabled.\n\n### The test that proves it\n\n10. **ripple** · `apps/web/src/hooks/__tests__/useAddressResolver.test.ts` L1-20\n   Now let us look at the test file. A new test case was added specifically for the negative-result scenario. It sets up lookup address to resolve to undefined — simulating an address with no ENS reverse record — then mounts the hook twice.\n\n11. **ripple** · `apps/web/src/hooks/__tests__/useAddressResolver.test.ts` L20-45\n   After both mounts complete, the test asserts that the lookup mock was called exactly once. That single assertion is the whole point: the second mount must have hit the cache and skipped the provider entirely. It also checks that the resolving flag is false on the second mount, confirming the hook settled synchronously from cache.\n\n12. **ripple** · `apps/web/src/hooks/__tests__/useAddressResolver.test.ts` L45-60\n   The test relies on the module-level cache persisting between the two render hook calls within the same test run. This works because Jest does not reset module state between calls inside a single test — but it does mean test ordering matters if the cache were ever pre-populated by an earlier test.\n\n13. **ripple** · `apps/web/src/hooks/__tests__/useAddressResolver.test.ts` L1-60\n   The existing positive-result tests are untouched, so we know the happy path — where lookup address returns a real name — still writes to cache and returns correctly. The new test only adds coverage for the previously unhandled empty case.\n\n### What can go wrong\n\n14. **risk** · `apps/web/src/hooks/useAddressResolver.ts` L23-35\n   Here is the first gotcha worth reviewer attention. The ENS service's lookup address swallows transient RPC errors and returns undefined. With this change, a network blip during the first mount gets cached as null — permanently suppressing retries for the rest of the session. The old behavior retried on every mount; this PR trades retry resilience for fewer calls.\n\n15. **risk** · `apps/web/src/hooks/useAddressResolver.ts` L23-35\n   Second risk: the async callback inside use async writes to the module-level cache as a side effect. If use async ever calls that function concurrently for the same address — say, due to rapid re-renders before the first await resolves — two writes race to the same cache slot. In practice this is unlikely, but it is worth noting for future refactors.\n\n16. **risk** · `apps/web/src/hooks/useAddressResolver.ts` L1-12\n   Third risk: the cache has no time-to-live and no invalidation. If an address gains an ENS name mid-session — say, a user registers one in another tab — the stale null entry will be served until the page reloads. For most users this is acceptable, but it is a known limitation of the in-memory approach.\n\n17. **risk** · `apps/web/src/hooks/useAddressResolver.ts` L13-22\n   Fourth: the ethers provider reference is in the dependency array, so switching chains correctly bypasses the cache and fires a fresh lookup. But if the provider object is recreated on every render for some reason, the cache would be bypassed on every mount too — defeating the fix. Worth confirming provider stability in the broader app setup.\n\n### The bottom line\n\n18. **wrap** · `apps/web/src/hooks/useAddressResolver.ts` L1-45 `useAddressResolver`\n   Bottom line: a two-line logic change — null as sentinel, in operator for presence check — stops the app from hammering the RPC provider for every address that has no ENS name, with a clear trade-off that transient errors are now silently cached for the session.\n\n## Reviewer checklist\n\n- [ ] Verify that the `in` operator cache-hit check correctly handles the case where `cache[chainId]` is undefined (i.e., no entry for the chain yet) to avoid a TypeError.\n- [ ] Confirm that a transient RPC error from `lookupAddress` returning `undefined` being cached as `null` is an acceptable trade-off, or that a follow-up issue is filed to distinguish errors from confirmed no-ENS results.\n- [ ] Check whether `useAsync` can invoke its async callback multiple times concurrently (e.g., on rapid re-renders before the first call resolves), which could cause a race condition writing `cache[chainId][address]` twice with potentially different values.\n- [ ] Ensure the new unit test does not rely on implicit module-level cache state leaking between test cases — confirm `jest.resetModules()` or equivalent isolation is not needed to keep the test deterministic.\n- [ ] Manually test that an address which gains an ENS name mid-session (or where the first lookup was a transient failure) does not serve a stale `null` from cache, and decide if a cache TTL or invalidation mechanism is needed.\n\n## File-by-file\n\n### `apps/web/src/hooks/__tests__/useAddressResolver.test.ts`\n\nA new test `caches no-ENS results so repeated lookups do not hit the provider` is added that mounts `useAddressResolver` twice for an address where `lookupAddress` resolves to `undefined`, asserting `lookupMock` is called exactly once across both mounts.\n\n_Verifies the negative-result caching behavior introduced in the implementation change, ensuring the provider is not called redundantly for addresses with no ENS name._\n\n**Risks:**\n- Test relies on module-level cache state persisting between the two `renderHook` calls — if test isolation resets the cache (e.g., via jest module reset), the assertion `toHaveBeenCalledTimes(1)` could give a false positive\n- No assertion that `resolving` is `false` after the first mount completes — only checked on second mount; a race could mask bugs\n- Does not verify behavior after a cache invalidation or page-level reset scenario\n\n### `apps/web/src/hooks/useAddressResolver.ts`\n\nChanged `cache` value type from `Record<string, string>` to `Record<string, string | null>`, replaced the `useEffect`-based cache write (positive results only) with an inline `await`+write inside `useAsync` that stores `null` for no-ENS results, and changed the cache-hit check from truthiness to `in` operator key-presence.\n\n_Caches negative ENS lookup results so repeated mounts for addresses with no ENS name skip the provider call instead of hitting Infura every time._\n\n**Risks:**\n- Transient RPC errors in lookupAddress return undefined and are now cached as null, permanently suppressing retries for the session\n- useAsync dependency array includes ethersProvider — if provider reference changes, cache is bypassed and a fresh lookup fires even for already-cached addresses\n- Cache is module-level and never invalidated; if an address gains an ENS name mid-session the stale null will be served until page reload\n- The async function inside useAsync now writes to the module-level cache as a side effect, which could cause issues if useAsync calls the function multiple times concurrently for the same address (race condition writing cache[chainId][debouncedValue] twice)\n\n---\n_Generated by prbrief • model: claude-sonnet-4-6 • 4 LLM calls • $0.09 • 72.5s_",
+  "files": {
+    "apps/web/src/hooks/useAddressResolver.ts": "import useAddressBook from '@/hooks/useAddressBook'\nimport { useWeb3ReadOnly } from '@/hooks/wallets/web3ReadOnly'\nimport { lookupAddress } from '@/services/ens'\nimport { useMemo } from 'react'\nimport useAsync from '@safe-global/utils/hooks/useAsync'\nimport useDebounce from '@safe-global/utils/hooks/useDebounce'\nimport { useHasFeature } from './useChains'\nimport { FEATURES } from '@safe-global/utils/utils/chains'\nimport useChainId from './useChainId'\n\nconst cache: Record<string, Record<string, string | null>> = {}\n\nexport const useAddressResolver = (address?: string) => {\n  const addressBook = useAddressBook()\n  const ethersProvider = useWeb3ReadOnly()\n  const debouncedValue = useDebounce(address, 200)\n  const addressBookName = address && addressBook[address]\n  const isDomainLookupEnabled = useHasFeature(FEATURES.DOMAIN_LOOKUP)\n  const shouldResolve = address && !addressBookName && isDomainLookupEnabled && !!ethersProvider && !!debouncedValue\n  const chainId = useChainId()\n\n  const [ens, _, isResolving] = useAsync<string | undefined>(async () => {\n    if (!shouldResolve) return\n    // Wait for debounce to settle so we never resolve a stale address\n    if (debouncedValue !== address) return\n    if (chainId && debouncedValue && cache[chainId] && debouncedValue in cache[chainId]) {\n      return cache[chainId][debouncedValue] ?? undefined\n    }\n    const result = await lookupAddress(ethersProvider, debouncedValue)\n    if (chainId && debouncedValue) {\n      cache[chainId] = cache[chainId] || {}\n      cache[chainId][debouncedValue] = result ?? null\n    }\n    return result\n  }, [chainId, ethersProvider, debouncedValue, shouldResolve, address])\n\n  const resolving = (shouldResolve && isResolving) || false\n\n  // Clear stale ENS while debounce catches up to the new address\n  const isStale = debouncedValue !== address\n\n  return useMemo(\n    () => ({\n      ens: isStale ? undefined : ens,\n      name: addressBookName,\n      resolving,\n    }),\n    [ens, addressBookName, resolving, isStale],\n  )\n}\n",
+    "apps/web/src/hooks/__tests__/useAddressResolver.test.ts": "import { useAddressResolver } from '@/hooks/useAddressResolver'\nimport * as addressBook from '@/hooks/useAddressBook'\nimport { zeroPadValue } from 'ethers'\nimport * as domains from '@/services/ens'\nimport * as web3ReadOnly from '@/hooks/wallets/web3ReadOnly'\nimport * as useChains from '@/hooks/useChains'\nimport { renderHook, waitFor, act } from '@/tests/test-utils'\nimport { JsonRpcProvider } from 'ethers'\n\nconst ADDRESS1 = zeroPadValue('0x01', 20)\nconst mockProvider = new JsonRpcProvider()\n\ndescribe('useAddressResolver', () => {\n  beforeEach(() => {\n    jest.resetAllMocks()\n    jest.spyOn(web3ReadOnly, 'useWeb3ReadOnly').mockImplementation(() => mockProvider)\n  })\n\n  it('returns address book name if found, not resolving ENS domain', async () => {\n    jest.spyOn(addressBook, 'default').mockReturnValue({\n      [ADDRESS1]: 'Testname',\n    })\n    const domainsMock = jest.spyOn(domains, 'lookupAddress').mockImplementation(() => {\n      return Promise.resolve('test.eth')\n    })\n\n    const { result } = renderHook(() => useAddressResolver(ADDRESS1))\n\n    await waitFor(() => {\n      expect(result.current.ens).toBeUndefined()\n      expect(result.current.name).toBe('Testname')\n      expect(result.current.resolving).toBe(false)\n      expect(domainsMock).toHaveBeenCalledTimes(0)\n    })\n  })\n\n  it('resolves ENS domain if no address book name is found', async () => {\n    jest.spyOn(addressBook, 'default').mockReturnValue({})\n    const domainsMock = jest.spyOn(domains, 'lookupAddress').mockImplementation(() => {\n      return Promise.resolve('test.eth')\n    })\n\n    jest.spyOn(useChains, 'useHasFeature').mockReturnValue(true)\n\n    const { result } = renderHook(() => useAddressResolver(ADDRESS1))\n\n    await waitFor(() => {\n      expect(result.current.ens).toBe('test.eth')\n      expect(result.current.name).toBeUndefined()\n      expect(result.current.resolving).toBe(false)\n      expect(domainsMock).toHaveBeenCalledTimes(1)\n    })\n  })\n\n  it('clears stale ENS when switching to a different address', async () => {\n    jest.useFakeTimers()\n\n    // Use unique addresses to avoid module-level cache from other tests\n    const ADDR_WITH_ENS = zeroPadValue('0xaa', 20)\n    const ADDR_WITHOUT_ENS = zeroPadValue('0xbb', 20)\n\n    jest.spyOn(addressBook, 'default').mockReturnValue({})\n    jest.spyOn(useChains, 'useHasFeature').mockReturnValue(true)\n    const lookupMock = jest.spyOn(domains, 'lookupAddress').mockImplementation((_provider, address) => {\n      if (address === ADDR_WITH_ENS) return Promise.resolve('first.eth')\n      return Promise.resolve(undefined)\n    })\n\n    const { result, rerender } = renderHook(({ address }) => useAddressResolver(address), {\n      initialProps: { address: ADDR_WITH_ENS },\n    })\n\n    // Advance past debounce and flush microtasks for first resolve\n    await act(async () => {\n      await jest.advanceTimersByTimeAsync(200)\n    })\n\n    expect(result.current.ens).toBe('first.eth')\n    expect(lookupMock).toHaveBeenCalledWith(mockProvider, ADDR_WITH_ENS)\n\n    // Switch to a different address\n    rerender({ address: ADDR_WITHOUT_ENS })\n\n    // ENS should be cleared immediately, not show stale 'first.eth'\n    expect(result.current.ens).toBeUndefined()\n\n    // Advance past debounce so the new address resolves\n    await act(async () => {\n      await jest.advanceTimersByTimeAsync(200)\n    })\n\n    // Verify lookup was called for the new address and ENS is still undefined\n    expect(lookupMock).toHaveBeenCalledWith(mockProvider, ADDR_WITHOUT_ENS)\n    expect(result.current.ens).toBeUndefined()\n\n    jest.useRealTimers()\n  })\n\n  it('caches no-ENS results so repeated lookups do not hit the provider', async () => {\n    const ADDR_NO_ENS = zeroPadValue('0xcc', 20)\n\n    jest.spyOn(addressBook, 'default').mockReturnValue({})\n    jest.spyOn(useChains, 'useHasFeature').mockReturnValue(true)\n    const lookupMock = jest.spyOn(domains, 'lookupAddress').mockResolvedValue(undefined)\n\n    const { unmount } = renderHook(() => useAddressResolver(ADDR_NO_ENS))\n\n    await waitFor(() => {\n      expect(lookupMock).toHaveBeenCalledTimes(1)\n    })\n\n    unmount()\n\n    const { result } = renderHook(() => useAddressResolver(ADDR_NO_ENS))\n\n    await waitFor(() => {\n      expect(result.current.resolving).toBe(false)\n      expect(result.current.ens).toBeUndefined()\n    })\n\n    expect(lookupMock).toHaveBeenCalledTimes(1)\n  })\n\n  it('does not resolve ENS domain if feature is disabled', async () => {\n    jest.spyOn(addressBook, 'default').mockReturnValue({})\n    const domainsMock = jest.spyOn(domains, 'lookupAddress').mockImplementation(() => {\n      return Promise.resolve('test.eth')\n    })\n    jest.spyOn(useChains, 'useHasFeature').mockReturnValue(false)\n\n    const { result } = renderHook(() => useAddressResolver(ADDRESS1))\n\n    await waitFor(() => {\n      expect(result.current.ens).toBeUndefined()\n      expect(result.current.name).toBeUndefined()\n      expect(result.current.resolving).toBe(false)\n      expect(domainsMock).toHaveBeenCalledTimes(0)\n    })\n  })\n})\n"
+  },
+  "has_audio": true,
+  "has_video": true,
+  "has_thumbnail": true,
+  "audio_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-wallet-monorepo/pr-7749/73621093d9ba/audio.mp3",
+  "audio_manifest": {
+    "file": "audio.mp3",
+    "total_ms": 333633,
+    "silence_ms": 400,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "adapter": "elevenlabs",
+    "model": "eleven_turbo_v2_5",
+    "intro": {
+      "narration": "Grab some popcorn and let's dive in. Here's the pitch: This PR fixes a performance issue in `useAddressResolver` where addresses with no ENS reverse record were never cached, causing a fresh Infura/RPC provider call on every component mount.",
+      "narration_ms": 14629,
+      "gap_ms": 500,
+      "duration_ms": 15129
+    },
+    "steps": [
+      {
+        "step": 1,
+        "start_ms": 15129,
+        "end_ms": 35655
+      },
+      {
+        "step": 2,
+        "start_ms": 36055,
+        "end_ms": 49987
+      },
+      {
+        "step": 3,
+        "start_ms": 50387,
+        "end_ms": 65248
+      },
+      {
+        "step": 4,
+        "start_ms": 65648,
+        "end_ms": 83249
+      },
+      {
+        "step": 5,
+        "start_ms": 83649,
+        "end_ms": 103432
+      },
+      {
+        "step": 6,
+        "start_ms": 103832,
+        "end_ms": 119296
+      },
+      {
+        "step": 7,
+        "start_ms": 119696,
+        "end_ms": 138226
+      },
+      {
+        "step": 8,
+        "start_ms": 138626,
+        "end_ms": 155391
+      },
+      {
+        "step": 9,
+        "start_ms": 155791,
+        "end_ms": 170187
+      },
+      {
+        "step": 10,
+        "start_ms": 170587,
+        "end_ms": 184240
+      },
+      {
+        "step": 11,
+        "start_ms": 184640,
+        "end_ms": 202798
+      },
+      {
+        "step": 12,
+        "start_ms": 203198,
+        "end_ms": 220427
+      },
+      {
+        "step": 13,
+        "start_ms": 220827,
+        "end_ms": 235038
+      },
+      {
+        "step": 14,
+        "start_ms": 235438,
+        "end_ms": 257033
+      },
+      {
+        "step": 15,
+        "start_ms": 257433,
+        "end_ms": 278935
+      },
+      {
+        "step": 16,
+        "start_ms": 279335,
+        "end_ms": 297818
+      },
+      {
+        "step": 17,
+        "start_ms": 298218,
+        "end_ms": 318419
+      },
+      {
+        "step": 18,
+        "start_ms": 318819,
+        "end_ms": 333633
+      }
+    ],
+    "chapters": [
+      {
+        "title": "Why this change",
+        "start_ms": 15129,
+        "end_ms": 49987,
+        "step_range": [
+          1,
+          2
+        ]
+      },
+      {
+        "title": "The caching fix",
+        "start_ms": 50387,
+        "end_ms": 170187,
+        "step_range": [
+          3,
+          9
+        ]
+      },
+      {
+        "title": "The test that proves it",
+        "start_ms": 170587,
+        "end_ms": 235038,
+        "step_range": [
+          10,
+          13
+        ]
+      },
+      {
+        "title": "What can go wrong",
+        "start_ms": 235438,
+        "end_ms": 318419,
+        "step_range": [
+          14,
+          17
+        ]
+      },
+      {
+        "title": "The bottom line",
+        "start_ms": 318819,
+        "end_ms": 333633,
+        "step_range": [
+          18,
+          18
+        ]
+      }
+    ],
+    "generated_at": 1777048122590
+  },
+  "audio_manifest_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-wallet-monorepo/pr-7749/73621093d9ba/audio.json",
+  "video_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-wallet-monorepo/pr-7749/73621093d9ba/video-github.mp4",
+  "thumbnail_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-wallet-monorepo/pr-7749/73621093d9ba/thumbnail.png",
+  "pr_url": "https://github.com/safe-global/safe-wallet-monorepo/pull/7749",
+  "is_sample": false,
+  "sample_id": null
+}

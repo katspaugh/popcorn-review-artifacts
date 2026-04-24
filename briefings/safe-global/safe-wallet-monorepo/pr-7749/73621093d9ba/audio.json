@@ -1,0 +1,154 @@
+{
+  "file": "audio.mp3",
+  "total_ms": 333633,
+  "silence_ms": 400,
+  "voice": "nPczCjzI2devNBz1zQrb",
+  "adapter": "elevenlabs",
+  "model": "eleven_turbo_v2_5",
+  "intro": {
+    "narration": "Grab some popcorn and let's dive in. Here's the pitch: This PR fixes a performance issue in `useAddressResolver` where addresses with no ENS reverse record were never cached, causing a fresh Infura/RPC provider call on every component mount.",
+    "narration_ms": 14629,
+    "gap_ms": 500,
+    "duration_ms": 15129
+  },
+  "steps": [
+    {
+      "step": 1,
+      "start_ms": 15129,
+      "end_ms": 35655
+    },
+    {
+      "step": 2,
+      "start_ms": 36055,
+      "end_ms": 49987
+    },
+    {
+      "step": 3,
+      "start_ms": 50387,
+      "end_ms": 65248
+    },
+    {
+      "step": 4,
+      "start_ms": 65648,
+      "end_ms": 83249
+    },
+    {
+      "step": 5,
+      "start_ms": 83649,
+      "end_ms": 103432
+    },
+    {
+      "step": 6,
+      "start_ms": 103832,
+      "end_ms": 119296
+    },
+    {
+      "step": 7,
+      "start_ms": 119696,
+      "end_ms": 138226
+    },
+    {
+      "step": 8,
+      "start_ms": 138626,
+      "end_ms": 155391
+    },
+    {
+      "step": 9,
+      "start_ms": 155791,
+      "end_ms": 170187
+    },
+    {
+      "step": 10,
+      "start_ms": 170587,
+      "end_ms": 184240
+    },
+    {
+      "step": 11,
+      "start_ms": 184640,
+      "end_ms": 202798
+    },
+    {
+      "step": 12,
+      "start_ms": 203198,
+      "end_ms": 220427
+    },
+    {
+      "step": 13,
+      "start_ms": 220827,
+      "end_ms": 235038
+    },
+    {
+      "step": 14,
+      "start_ms": 235438,
+      "end_ms": 257033
+    },
+    {
+      "step": 15,
+      "start_ms": 257433,
+      "end_ms": 278935
+    },
+    {
+      "step": 16,
+      "start_ms": 279335,
+      "end_ms": 297818
+    },
+    {
+      "step": 17,
+      "start_ms": 298218,
+      "end_ms": 318419
+    },
+    {
+      "step": 18,
+      "start_ms": 318819,
+      "end_ms": 333633
+    }
+  ],
+  "chapters": [
+    {
+      "title": "Why this change",
+      "start_ms": 15129,
+      "end_ms": 49987,
+      "step_range": [
+        1,
+        2
+      ]
+    },
+    {
+      "title": "The caching fix",
+      "start_ms": 50387,
+      "end_ms": 170187,
+      "step_range": [
+        3,
+        9
+      ]
+    },
+    {
+      "title": "The test that proves it",
+      "start_ms": 170587,
+      "end_ms": 235038,
+      "step_range": [
+        10,
+        13
+      ]
+    },
+    {
+      "title": "What can go wrong",
+      "start_ms": 235438,
+      "end_ms": 318419,
+      "step_range": [
+        14,
+        17
+      ]
+    },
+    {
+      "title": "The bottom line",
+      "start_ms": 318819,
+      "end_ms": 333633,
+      "step_range": [
+        18,
+        18
+      ]
+    }
+  ],
+  "generated_at": 1777048122590
+}
