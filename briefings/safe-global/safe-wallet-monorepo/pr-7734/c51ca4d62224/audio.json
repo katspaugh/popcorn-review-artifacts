@@ -1,0 +1,168 @@
+{
+  "file": "audio.mp3",
+  "total_ms": 368213,
+  "silence_ms": 400,
+  "voice": "nPczCjzI2devNBz1zQrb",
+  "adapter": "elevenlabs",
+  "model": "eleven_turbo_v2_5",
+  "intro": {
+    "narration": "Grab some popcorn and let's dive in. Here's the pitch: This PR fixes the Space safe bar's chain selector ('All networks' accordion) which previously listed every non-deployed chain regardless of whether the Safe could actually be added to it, leading to silent failures for incompatible Safes (outdated mastercopy, zkSync/Lens, etc.).",
+    "narration_ms": 20759,
+    "gap_ms": 500,
+    "duration_ms": 21259
+  },
+  "steps": [
+    {
+      "step": 1,
+      "start_ms": 21259,
+      "end_ms": 38488
+    },
+    {
+      "step": 2,
+      "start_ms": 38888,
+      "end_ms": 55096
+    },
+    {
+      "step": 3,
+      "start_ms": 55496,
+      "end_ms": 75047
+    },
+    {
+      "step": 4,
+      "start_ms": 75447,
+      "end_ms": 90494
+    },
+    {
+      "step": 5,
+      "start_ms": 90894,
+      "end_ms": 112303
+    },
+    {
+      "step": 6,
+      "start_ms": 112703,
+      "end_ms": 133369
+    },
+    {
+      "step": 7,
+      "start_ms": 133769,
+      "end_ms": 148676
+    },
+    {
+      "step": 8,
+      "start_ms": 149076,
+      "end_ms": 164123
+    },
+    {
+      "step": 9,
+      "start_ms": 164523,
+      "end_ms": 182495
+    },
+    {
+      "step": 10,
+      "start_ms": 182895,
+      "end_ms": 198359
+    },
+    {
+      "step": 11,
+      "start_ms": 198759,
+      "end_ms": 215895
+    },
+    {
+      "step": 12,
+      "start_ms": 216295,
+      "end_ms": 233756
+    },
+    {
+      "step": 13,
+      "start_ms": 234156,
+      "end_ms": 247809
+    },
+    {
+      "step": 14,
+      "start_ms": 248209,
+      "end_ms": 262652
+    },
+    {
+      "step": 15,
+      "start_ms": 263052,
+      "end_ms": 280746
+    },
+    {
+      "step": 16,
+      "start_ms": 281146,
+      "end_ms": 304505
+    },
+    {
+      "step": 17,
+      "start_ms": 304905,
+      "end_ms": 324688
+    },
+    {
+      "step": 18,
+      "start_ms": 325088,
+      "end_ms": 345940
+    },
+    {
+      "step": 19,
+      "start_ms": 346340,
+      "end_ms": 368213
+    }
+  ],
+  "chapters": [
+    {
+      "title": "Why this change",
+      "start_ms": 21259,
+      "end_ms": 55096,
+      "step_range": [
+        1,
+        2
+      ]
+    },
+    {
+      "title": "The new state hook",
+      "start_ms": 55496,
+      "end_ms": 148676,
+      "step_range": [
+        3,
+        7
+      ]
+    },
+    {
+      "title": "The new visual section",
+      "start_ms": 149076,
+      "end_ms": 215895,
+      "step_range": [
+        8,
+        11
+      ]
+    },
+    {
+      "title": "Consumers that had to adapt",
+      "start_ms": 216295,
+      "end_ms": 280746,
+      "step_range": [
+        12,
+        15
+      ]
+    },
+    {
+      "title": "What can go wrong",
+      "start_ms": 281146,
+      "end_ms": 345940,
+      "step_range": [
+        16,
+        18
+      ]
+    },
+    {
+      "title": "The bottom line",
+      "start_ms": 346340,
+      "end_ms": 368213,
+      "step_range": [
+        19,
+        19
+      ]
+    }
+  ],
+  "generated_at": 1777031977763
+}

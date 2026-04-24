@@ -1,0 +1,1048 @@
+{
+  "slug": "safe-global/safe-wallet-monorepo",
+  "pr_number": 7734,
+  "head_sha": "c51ca4d62224de6e7b55fb87c93a2c263babd195",
+  "head_sha_short": "c51ca4d62224",
+  "pr_title": "feat: optimize chain selector",
+  "created_at": 1777031842195,
+  "briefing": {
+    "id": 12,
+    "pr": {
+      "repo_slug": "safe-global/safe-wallet-monorepo",
+      "number": 7734
+    },
+    "head_sha": "c51ca4d62224de6e7b55fb87c93a2c263babd195",
+    "base_sha": "64ca8110d04948d29d0d9a2c0991c19fd3fe6577",
+    "status": "done",
+    "model": "claude-sonnet-4-6",
+    "cost_cents": 25,
+    "latency_ms": 129595,
+    "summary_md": "This PR fixes the Space safe bar's chain selector ('All networks' accordion) which previously listed every non-deployed chain regardless of whether the Safe could actually be added to it, leading to silent failures for incompatible Safes (outdated mastercopy, zkSync/Lens, etc.). A new shared hook `useAddNetworkState` is introduced under `@/features/multichain` that composes `useSafeCreationData`, `useCompatibleNetworks`, and `hasMultiChainAddNetworkFeature` to produce a typed state object with `unavailableReason`, `availableNetworks`, and `loading`. A new `AllNetworksSection` component consumes this hook and renders one of four states: nothing (feature disabled), a muted info row with optional tooltip (unavailable reason), a spinner (loading), or the accordion with per-chain disabled rows for incompatible chains. `ChainSelectorBlock` drops its `availableChains` prop in favour of `safeAddress` + `deployedChainIds`, and `useSpaceChainSelector` removes its naive set-difference derivation entirely.",
+    "file_summaries": [
+      {
+        "path": "apps/web/src/components/common/SpaceSafeBar/SpaceChainSelector.stories.tsx",
+        "what_changed": "The stories file removes the static `availableChains` array and the `NoAvailableChains` story, replacing `availableChains` prop with `safeAddress` and `deployedChainIds` props on `ChainSelectorBlock` in both `SingleChain` and `MultiChain` stories. The comment is updated to note that `useAddNetworkState` now drives the 'All networks' section dynamically.",
+        "why_it_matters": "Likely reflects the prop contract change on `ChainSelectorBlock` where static chain derivation is replaced by hook-driven logic, requiring stories to supply `safeAddress`/`deployedChainIds` instead of a pre-computed list.",
+        "risk_hints": [
+          "The `NoAvailableChains` story is deleted entirely — there is no replacement story covering the 'no available chains' / unavailable-reason visual states, reducing Storybook coverage for error/empty states",
+          "The stub `safeAddress` values (0x000...001, 0x000...002) may not trigger realistic `useAddNetworkState` behavior in the mocked scenario; reviewers should confirm the mock scenario resolves hooks correctly",
+          "If `useAddNetworkState` makes real RPC calls inside the Portal-rendered content, Storybook renders may hang or show spinners indefinitely without proper mocking"
+        ]
+      },
+      {
+        "path": "apps/web/src/components/common/SpaceSafeBar/SpaceChainSelector.test.tsx",
+        "what_changed": "The test file updates the `ChainSelectorBlock` mock to accept and render `safeAddress` and `deployedChainIds` props (via `data-*` attributes), removes `availableChains` from all `mockUseSpaceChainSelector` return values, and adds a new test case asserting those two props are correctly forwarded to `ChainSelectorBlock`.",
+        "why_it_matters": "Reflects the prop contract change where `ChainSelectorBlock` no longer receives `availableChains` but instead receives `safeAddress` and `deployedChainIds` to self-manage network availability logic.",
+        "risk_hints": [
+          "Verify the real `ChainSelectorBlock` component signature matches the updated mock — if the prop names diverge the tests pass but the component silently receives wrong props",
+          "Check that all other callers of `useSpaceChainSelector` that previously consumed `availableChains` have been updated; the test removal of `availableChains` from mock returns only proves the test compiles, not that no production code still reads it",
+          "The new test only checks attribute presence/value, not that `safeAddress`/`deployedChainIds` are actually used to gate network availability — consider whether a higher-level integration test is needed"
+        ]
+      },
+      {
+        "path": "apps/web/src/components/common/SpaceSafeBar/SpaceChainSelector.tsx",
+        "what_changed": "SpaceChainSelector removes `availableChains` from the destructured `useSpaceChainSelector` return value and stops passing it as a prop to `ChainSelectorBlock`, instead passing `safeAddress` and `deployedChainIds` directly to `ChainSelectorBlock`.",
+        "why_it_matters": "Shifts responsibility for computing available networks from the call site into `ChainSelectorBlock` (via `AllNetworksSection`/`useAddNetworkState`), enabling proper compatibility checks rather than a naive set-difference.",
+        "risk_hints": [
+          "Verify `ChainSelectorBlock` prop types were updated to accept `safeAddress`+`deployedChainIds` and remove `availableChains`",
+          "Confirm `useSpaceChainSelector` no longer exports `availableChains` and that no other consumer depends on it",
+          "Check that `deployedChainIds` was already available in `useSpaceChainSelector` return or was newly added"
+        ]
+      },
+      {
+        "path": "apps/web/src/components/common/SpaceSafeBar/hooks/useSpaceChainSelector.test.ts",
+        "what_changed": "Removed two test cases from `useSpaceChainSelector.test.ts` that verified the `availableChains` return value — specifically the tests asserting that `availableChains` excludes already-deployed chain IDs for both single-chain and multi-chain Safes.",
+        "why_it_matters": "The `availableChains` property was removed from `useSpaceChainSelector`'s return shape as part of moving that logic into `useAddNetworkState`/`AllNetworksSection`, so the tests covering it are no longer applicable.",
+        "risk_hints": [
+          "Verify that `availableChains` is fully removed from `useSpaceChainSelector` return type and not silently still exported/consumed elsewhere",
+          "Confirm equivalent coverage of the 'exclude deployed chains' logic now exists in `useAddNetworkState` tests so there is no net loss of test coverage",
+          "Check that no other callers of `useSpaceChainSelector` still destructure `availableChains` and silently receive `undefined`"
+        ]
+      },
+      {
+        "path": "apps/web/src/components/common/SpaceSafeBar/hooks/useSpaceChainSelector.ts",
+        "what_changed": "Removes the `availableChains` derived state (a naive `chainConfigs − deployedChainIds` diff) from `useSpaceChainSelector`, along with its `useMemo` and its inclusion in the hook's return value.",
+        "why_it_matters": "The naive diff was over-permissive, listing every non-deployed chain regardless of compatibility; responsibility for computing available chains is moved to `AllNetworksSection`/`useAddNetworkState` which performs proper compatibility checks.",
+        "risk_hints": [
+          "Verify all callers of `useSpaceChainSelector` no longer reference `availableChains` — a missed destructure would silently be `undefined`",
+          "Confirm `ChainSelectorBlock` prop contract was updated in lockstep to remove `availableChains` prop",
+          "Check that no TypeScript type for the hook's return value still declares `availableChains`"
+        ]
+      },
+      {
+        "path": "apps/web/src/features/multichain/hooks/__tests__/useAddNetworkState.test.ts",
+        "what_changed": "Adds a new test file for `useAddNetworkState` hook covering 8 scenarios: happy path filtering, creation data error (`safe-specific`), empty compatible networks (`outdated-mastercopy`), all chains unavailable (`safe-specific`), feature flag disabled on current chain, feature flag filtering on target chains, already-deployed chain exclusion, and loading state propagation.",
+        "why_it_matters": "Validates the core logic of the new shared hook that gates which chains appear in the Space chain selector, ensuring the correct `unavailableReason` is set under each failure mode.",
+        "risk_hints": [
+          "Test for 'all compatible chains unavailable' expects `unavailableReason='safe-specific'` but the compatible list includes the current chain (chainId '1') which is already deployed — verify the hook correctly handles this edge case vs a truly empty post-filter list",
+          "No test covers the case where `compatible` contains a mix of available and unavailable chains (partial availability) — the hook's behavior in that scenario is untested",
+          "The `setupDefaults` mock for `useCompatibleNetworks` returns all `configs` including the already-deployed chain; tests rely on the hook itself filtering by `deployedChainIds`, so if that filtering is missing the assertions would still pass incorrectly",
+          "Loading state test with `compatible: []` expects `unavailableReason` to stay null — confirm the hook checks `loading` before evaluating empty compatible list to avoid a race condition"
+        ]
+      },
+      {
+        "path": "apps/web/src/features/multichain/hooks/index.ts",
+        "what_changed": "Adds two new exports from `apps/web/src/features/multichain/hooks/index.ts`: the `useAddNetworkState` hook and three TypeScript types (`AddNetworkState`, `AddNetworkUnavailableReason`, `AvailableNetwork`) from the new `./useAddNetworkState` module.",
+        "why_it_matters": "Makes the new hook and its types part of the public API of the `@/features/multichain` barrel so downstream consumers like `AllNetworksSection` can import them without reaching into internal paths.",
+        "risk_hints": [
+          "Verify `./useAddNetworkState` file actually exists and exports all three named types to avoid build-time errors",
+          "Check that no existing consumer was already importing these identifiers from a different path, which could cause duplicate-export conflicts"
+        ]
+      },
+      {
+        "path": "apps/web/src/features/multichain/hooks/useAddNetworkState.ts",
+        "what_changed": "New hook `useAddNetworkState(safeAddress, deployedChainIds)` added that composes `useSafeCreationData`, `useCompatibleNetworks`, and `hasMultiChainAddNetworkFeature` to return a unified `AddNetworkState` object with `loading`, `availableNetworks`, `unavailableReason`, `error`, and `isFeatureEnabled` fields.",
+        "why_it_matters": "Centralises the eligibility logic for adding a Safe to a new network so that UI components can show accurate error states instead of silently failing when a Safe is incompatible.",
+        "risk_hints": [
+          "Logic conflict: `noAvailableNetworks` is true only when `availableNetworks.length > 0 && every(!available)`, but `isUnsupportedSafeCreationVersion` checks `safeCreationData && !allCompatibleChains?.length`. The IIFE evaluates `safeCreationError` before `noAvailableNetworks` before `isUnsupportedSafeCreationVersion`, so `outdated-mastercopy` can never be returned if there is also a `safeCreationError` — verify this ordering is intentional.",
+          "`noAvailableNetworks` condition requires `availableNetworks.length > 0` (non-empty) AND all unavailable, meaning a list that is entirely empty (no compatible chains at all) does NOT trigger 'safe-specific' via this path — only `isUnsupportedSafeCreationVersion` or `safeCreationError` would catch it; confirm empty-list case is handled.",
+          "`availableNetworks` is filtered to chains where `hasMultiChainAddNetworkFeature(config)` is true, but the `AvailableNetwork` type includes an `available: boolean` field that is never explicitly set here — it must come from `useCompatibleNetworks` returning `Chain & { available: boolean }`; verify the upstream type actually carries this field.",
+          "When `unavailableReason` is non-null, `availableNetworks` is forced to `[]`, discarding potentially useful data; callers relying on the list for any secondary purpose will get nothing.",
+          "`useSafeCreationData` is called unconditionally even when `isFeatureEnabled` is false, causing unnecessary RPC calls; consider short-circuiting when the feature is disabled."
+        ]
+      },
+      {
+        "path": "apps/web/src/features/multichain/index.ts",
+        "what_changed": "The `multichain` index re-exports `useAddNetworkState` function and three new types (`AddNetworkState`, `AddNetworkUnavailableReason`, `AvailableNetwork`) from `./hooks`.",
+        "why_it_matters": "Exposes the new shared hook and its types as part of the public `@/features/multichain` API so consumers like `AllNetworksSection` can import them without reaching into internal paths.",
+        "risk_hints": [
+          "Verify that `useAddNetworkState`, `AddNetworkState`, `AddNetworkUnavailableReason`, and `AvailableNetwork` are actually exported from `./hooks` (i.e., the hooks barrel file re-exports them correctly) to avoid silent undefined exports.",
+          "Check no circular dependency is introduced by adding these exports to the index."
+        ]
+      },
+      {
+        "path": "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.test.tsx",
+        "what_changed": "New test file `AllNetworksSection.test.tsx` added with 232 lines covering all render states of the `AllNetworksSection` component: feature disabled, safe-specific unavailability, outdated-mastercopy, loading spinner, empty available networks, accordion expansion, per-chain add buttons, disabled chains (`available=false`), and analytics events (`SHOW_ALL_NETWORKS`, `ADD_NEW_NETWORK`).",
+        "why_it_matters": "Provides unit-test coverage for the new `AllNetworksSection` component and its integration with `useAddNetworkState`, ensuring the gating logic and analytics fire correctly before the component ships.",
+        "risk_hints": [
+          "Tests mock `useAddNetworkState` entirely — no integration coverage of the actual hook logic; bugs in hook composition won't be caught here.",
+          "The 'renders nothing when there are no available networks and no error' case (feature enabled, no reason, empty list) expects an empty DOM — verify the real component actually returns null in this state and not a wrapper element.",
+          "Accordion expand/collapse relies on `fireEvent.click(screen.getByText('All networks'))` — if the accordion trigger text changes or is wrapped in a non-interactive element, tests will silently pass without exercising the accordion.",
+          "Tooltip presence is asserted via `data-testid='chain-selector-unavailable-tooltip'` — confirm the production component actually sets this testid on the tooltip trigger, not just the tooltip content.",
+          "No test covers the case where `error` is present but `unavailableReason` is NOT `safe-specific` — unclear if tooltip should appear in that scenario.",
+          "Analytics test clears mock between expand and collapse but does not reset between describe blocks; `beforeEach(jest.resetAllMocks)` at the top level should handle it, but nested `beforeEach` in the analytics block does not call `mockTrack.mockClear()` before each analytics test, relying on outer reset."
+        ]
+      },
+      {
+        "path": "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.tsx",
+        "what_changed": "New `AllNetworksSection` component added that consumes `useAddNetworkState(safeAddress, deployedChainIds)` and renders one of four states: null (feature disabled), a muted info row with optional tooltip (unavailableReason set), a spinner (loading), or an accordion listing available networks with disabled rows for incompatible chains.",
+        "why_it_matters": "Replaces the naive chain-diffing approach in `ChainSelectorBlock`/`useSpaceChainSelector` with a gated, compatibility-aware UI that prevents users from clicking into a broken add-network flow for ineligible Safes.",
+        "risk_hints": [
+          "handleAccordionChange casts `value` to `unknown` then `string[]` — if the Accordion component passes a single string instead of an array, `openedIds.includes('all-networks')` will always be false and the analytics event will never fire",
+          "onClick guard `!disabled && handleChainClick(...)` is redundant with the `disabled` attribute on the button but harmless; verify the button's disabled state actually prevents synthetic click events in all target browsers",
+          "Tooltip is only shown when `error?.message` is truthy, but `unavailableReason` could be 'safe-specific' with no error — confirm UX intent that the info icon is non-interactive in that case",
+          "TooltipTrigger uses a `render` prop pattern with a raw `<span>` — verify this matches the actual Tooltip API in use; misuse could silently drop the trigger",
+          "availableNetworks.length === 0 returns null after the loading check, meaning a successfully resolved but empty list is invisible with no feedback — could confuse users if loading finishes with zero results",
+          "No error boundary or explicit error state rendered when `error` is set but `unavailableReason` is null — error may be silently swallowed"
+        ]
+      },
+      {
+        "path": "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/ChainSelectorBlock.tsx",
+        "what_changed": "ChainSelectorBlock's inline 'All networks' accordion (with naive availableChains prop) is replaced by a new AllNetworksSection component. The prop availableChains is removed and replaced with safeAddress + deployedChainIds, which are forwarded to AllNetworksSection.",
+        "why_it_matters": "Delegates network availability logic to AllNetworksSection/useAddNetworkState so only genuinely compatible chains are shown, preventing users from clicking chains that would silently fail.",
+        "risk_hints": [
+          "Verify all callers of ChainSelectorBlock have been updated to pass safeAddress and deployedChainIds instead of availableChains",
+          "handleAddNetworkClick is now passed to AllNetworksSection — confirm analytics events (ADD_NEW_NETWORK) still fire correctly through this indirection",
+          "ChainLogo and Plus imports removed; confirm Plus is not needed elsewhere in this file",
+          "AllNetworksSection is a new component — its error/loading/unavailable states need independent review for correctness and accessibility"
+        ]
+      }
+    ],
+    "architecture_delta": {
+      "architecture_notes": "The data flow now runs: `SpaceChainSelector` → `ChainSelectorBlock` (passes `safeAddress` + `deployedChainIds`) → `AllNetworksSection` → `useAddNetworkState` → `useSafeCreationData` + `useCompatibleNetworks` + `hasMultiChainAddNetworkFeature`. This means `useSafeCreationData` (which hits RPCs across all deployed chains) now fires on every dropdown open rather than only when the add-network dialog is opened, which is a new performance cost. The `availableChains` field is removed from `useSpaceChainSelector`'s return type and from `ChainSelectorBlock`'s prop contract; any undiscovered caller would silently receive `undefined`. New public exports (`useAddNetworkState`, `AddNetworkState`, `AddNetworkUnavailableReason`, `AvailableNetwork`) are added to the `@/features/multichain` barrel via both `hooks/index.ts` and `features/multichain/index.ts`.",
+      "reviewer_checklist": [
+        "Verify `ChainSelectorBlock` TypeScript prop types have `availableChains` fully removed and `safeAddress`/`deployedChainIds` added, and confirm no other caller in the codebase still passes `availableChains` or destructures it from `useSpaceChainSelector`.",
+        "Audit the `useAddNetworkState` IIFE logic ordering: confirm that the `outdated-mastercopy` reason can actually be reached when `safeCreationError` is also set, and that an entirely empty `allCompatibleChains` list (not just all-unavailable) is correctly handled.",
+        "Check that `useSafeCreationData` is not called (or is short-circuited) when `isFeatureEnabled` is false, to avoid unnecessary RPC calls on every selector open for chains where the feature is disabled.",
+        "Confirm `AllNetworksSection` returns a visible empty/null state (not a silent blank) when loading finishes with zero available networks, so users are not left with an unexplained empty area.",
+        "Validate that the `SHOW_ALL_NETWORKS` analytics event fires only on accordion expand (not collapse) by checking the `handleAccordionChange` cast from `unknown` to `string[]` — ensure the Accordion component actually passes an array and that `openedIds.includes('all-networks')` behaves correctly.",
+        "Manually open the chain selector for a Safe with an outdated mastercopy and for a healthy multichain-eligible Safe to confirm the correct UI state renders in each case, and that clicking a disabled chain row does not trigger `onAddNetwork`."
+      ]
+    },
+    "tour": {
+      "chapters": [
+        {
+          "title": "Why this change",
+          "step_range": [
+            1,
+            2
+          ]
+        },
+        {
+          "title": "The new state hook",
+          "step_range": [
+            3,
+            7
+          ]
+        },
+        {
+          "title": "The new visual section",
+          "step_range": [
+            8,
+            11
+          ]
+        },
+        {
+          "title": "Consumers that had to adapt",
+          "step_range": [
+            12,
+            15
+          ]
+        },
+        {
+          "title": "What can go wrong",
+          "step_range": [
+            16,
+            18
+          ]
+        },
+        {
+          "title": "The bottom line",
+          "step_range": [
+            19,
+            19
+          ]
+        }
+      ],
+      "total_seconds": 255,
+      "steps": [
+        {
+          "step": 1,
+          "phase": "motivation",
+          "location": {
+            "file": "apps/web/src/components/common/SpaceSafeBar/hooks/useSpaceChainSelector.ts",
+            "line_range": [
+              16,
+              35
+            ],
+            "symbol": "useSpaceChainSelector"
+          },
+          "action": "open",
+          "narration": "Here is the root of the problem. The old hook derived available chains by simply subtracting already-deployed chain IDs from the full chain config list. That naive set-difference had no idea whether the Safe was actually compatible with those chains, so incompatible ones slipped through silently.",
+          "estimated_seconds": 15
+        },
+        {
+          "step": 2,
+          "phase": "motivation",
+          "location": {
+            "file": "apps/web/src/components/common/SpaceSafeBar/hooks/useSpaceChainSelector.ts",
+            "line_range": [
+              16,
+              35
+            ],
+            "symbol": "useSpaceChainSelector"
+          },
+          "action": "scroll-to",
+          "narration": "The result was that clicking a chain in the All Networks accordion could silently fail later — outdated mastercopy, zkSync incompatibility, missing creation data. The user got no warning at all. This PR fixes that by moving the eligibility check much earlier in the flow.",
+          "estimated_seconds": 15,
+          "diagram": {
+            "kind": "flowchart",
+            "title": "Before and after the fix",
+            "mermaid": "flowchart TB\n  subgraph Before\n    A1[useSpaceChainSelector] -->|chainConfigs minus deployedChainIds| B1[availableChains]\n    B1 --> C1[All networks accordion]\n    C1 -->|click| D1[add-network dialog]\n    D1 --> E1[silent failure for incompatible Safes]\n  end\n  subgraph After\n    A2[ChainSelectorBlock] --> S[AllNetworksSection]\n    S --> H[useAddNetworkState]\n    H --> H1[useSafeCreationData]\n    H --> H2[useCompatibleNetworks]\n    H --> H3[hasMultiChainAddNetworkFeature]\n    H -->|unavailableReason| R{state?}\n    R -- safe-specific --> M1[Muted info row]\n    R -- outdated-mastercopy --> M2[Muted info row]\n    R -- loading --> M3[Spinner]\n    R -- null --> M4[Accordion with per-chain disabled rows]\n  end"
+          }
+        },
+        {
+          "step": 3,
+          "phase": "change",
+          "location": {
+            "file": "apps/web/src/features/multichain/hooks/useAddNetworkState.ts",
+            "line_range": [
+              8,
+              23
+            ],
+            "symbol": "AddNetworkState"
+          },
+          "action": "open",
+          "narration": "The centrepiece of this PR is the new useAddNetworkState hook, and it starts with its type contract. AddNetworkUnavailableReason is a union of safe-specific and outdated-mastercopy, and AddNetworkState bundles loading, availableNetworks, that reason, an error, and a feature-enabled flag into one object.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 4,
+          "phase": "change",
+          "location": {
+            "file": "apps/web/src/features/multichain/hooks/useAddNetworkState.ts",
+            "line_range": [
+              25,
+              55
+            ],
+            "symbol": "useAddNetworkState"
+          },
+          "action": "scroll-to",
+          "narration": "The hook itself calls useSafeCreationData and useCompatibleNetworks, then filters the compatible list down to chains where hasMultiChainAddNetworkFeature is true and the chain is not already deployed. This is the real eligibility check that was missing before.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 5,
+          "phase": "change",
+          "location": {
+            "file": "apps/web/src/features/multichain/hooks/useAddNetworkState.ts",
+            "line_range": [
+              56,
+              90
+            ],
+            "symbol": "useAddNetworkState"
+          },
+          "action": "scroll-to",
+          "narration": "The unavailableReason is resolved through a short-circuit IIFE. A creation data error maps to safe-specific; an empty compatible list maps to outdated-mastercopy; all networks being unavailable also maps to safe-specific. When a reason is set, availableNetworks is forced to an empty array so callers never see a partial list alongside an error.",
+          "estimated_seconds": 15
+        },
+        {
+          "step": 6,
+          "phase": "change",
+          "location": {
+            "file": "apps/web/src/features/multichain/hooks/__tests__/useAddNetworkState.test.ts",
+            "line_range": [
+              1,
+              50
+            ],
+            "symbol": "useAddNetworkState"
+          },
+          "action": "open",
+          "narration": "The test file covers eight scenarios: happy path filtering, creation data error, empty compatible networks, all chains unavailable, feature flag off, feature flag filtering on target chains, already-deployed exclusion, and loading state propagation. That is solid coverage of every branch in the IIFE.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 7,
+          "phase": "change",
+          "location": {
+            "file": "apps/web/src/features/multichain/hooks/index.ts",
+            "line_range": [
+              1,
+              10
+            ]
+          },
+          "action": "open",
+          "narration": "The hooks barrel re-exports useAddNetworkState and its three companion types, making them part of the public multichain feature API. The main multichain index then re-exports them again so any consumer can import from the top-level feature path.",
+          "callouts": [
+            {
+              "file": "apps/web/src/features/multichain/index.ts",
+              "line": 1,
+              "note": "top-level barrel re-export"
+            }
+          ],
+          "estimated_seconds": 11
+        },
+        {
+          "step": 8,
+          "phase": "change",
+          "location": {
+            "file": "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.tsx",
+            "line_range": [
+              16,
+              35
+            ],
+            "symbol": "AllNetworksSectionProps"
+          },
+          "action": "open",
+          "narration": "AllNetworksSection is the new visual owner of the All Networks area. Its props are simple: safeAddress, deployedChainIds, and an onAddNetwork callback. It calls useAddNetworkState internally and decides which of the four render states to show.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 9,
+          "phase": "change",
+          "location": {
+            "file": "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.tsx",
+            "line_range": [
+              36,
+              80
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "The first two guard clauses handle the easy cases: if the feature is disabled the component returns null, and if unavailableReason is set it renders a muted info row. When the reason is safe-specific and an error message exists, the info icon becomes a tooltip trigger showing that raw message.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 10,
+          "phase": "change",
+          "location": {
+            "file": "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.tsx",
+            "line_range": [
+              81,
+              130
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "Past the error guards, a loading state shows a centred spinner. Then comes the accordion itself, where each chain row checks the available flag from useCompatibleNetworks. Incompatible chains render as a disabled button labelled Not available and cannot fire onAddNetwork.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 11,
+          "phase": "change",
+          "location": {
+            "file": "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.test.tsx",
+            "line_range": [
+              1,
+              50
+            ]
+          },
+          "action": "open",
+          "narration": "The component test mocks useAddNetworkState and exercises all render branches, including analytics: SHOW_ALL_NETWORKS fires only on expand, and ADD_NEW_NETWORK fires with the top-bar label on a successful chain click. Disabled chain rows are confirmed to not fire the callback.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 12,
+          "phase": "ripple",
+          "location": {
+            "file": "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/ChainSelectorBlock.tsx",
+            "line_range": [
+              9,
+              30
+            ],
+            "symbol": "ChainSelectorBlockProps"
+          },
+          "action": "open",
+          "narration": "ChainSelectorBlock is the first consumer that had to adapt. Its prop contract drops availableChains and gains safeAddress plus deployedChainIds. The inline accordion markup is replaced by a single AllNetworksSection element, forwarding those two props and the onAddNetwork callback.",
+          "callouts": [
+            {
+              "file": "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.tsx",
+              "line": 16,
+              "note": "receives safeAddress + deployedChainIds here"
+            }
+          ],
+          "estimated_seconds": 14
+        },
+        {
+          "step": 13,
+          "phase": "ripple",
+          "location": {
+            "file": "apps/web/src/components/common/SpaceSafeBar/SpaceChainSelector.tsx",
+            "line_range": [
+              1,
+              40
+            ]
+          },
+          "action": "open",
+          "narration": "SpaceChainSelector no longer destructures availableChains from useSpaceChainSelector. Instead it passes safeAddress and deployedChainIds straight down to ChainSelectorBlock. The chain-diffing logic is gone from this layer entirely.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 14,
+          "phase": "ripple",
+          "location": {
+            "file": "apps/web/src/components/common/SpaceSafeBar/hooks/useSpaceChainSelector.ts",
+            "line_range": [
+              16,
+              35
+            ],
+            "symbol": "useSpaceChainSelector"
+          },
+          "action": "jump-to-definition",
+          "narration": "Back in the hook, the useMemo that computed availableChains is simply deleted. The hook's return type no longer includes that field, so any undiscovered caller that still destructures it would silently receive undefined — worth a quick search to be sure.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 15,
+          "phase": "ripple",
+          "location": {
+            "file": "apps/web/src/components/common/SpaceSafeBar/SpaceChainSelector.stories.tsx",
+            "line_range": [
+              47,
+              90
+            ],
+            "symbol": "SingleChain"
+          },
+          "action": "flick-back",
+          "narration": "The stories file swaps availableChains for safeAddress and deployedChainIds on both the SingleChain and MultiChain stories, and removes the NoAvailableChains story entirely. That last deletion is worth noting: there is no replacement story covering the unavailable-reason visual states in Storybook.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 16,
+          "phase": "risk",
+          "location": {
+            "file": "apps/web/src/features/multichain/hooks/useAddNetworkState.ts",
+            "line_range": [
+              56,
+              90
+            ],
+            "symbol": "useAddNetworkState"
+          },
+          "action": "scroll-to",
+          "narration": "Watch the IIFE evaluation order carefully. safeCreationError is checked before noAvailableNetworks, which is checked before isUnsupportedSafeCreationVersion. That means outdated-mastercopy can never be returned when a creation error is also present — the safe-specific reason wins. Confirm this ordering is intentional and not an accidental priority inversion.",
+          "estimated_seconds": 15
+        },
+        {
+          "step": 17,
+          "phase": "risk",
+          "location": {
+            "file": "apps/web/src/features/multichain/hooks/useAddNetworkState.ts",
+            "line_range": [
+              25,
+              55
+            ],
+            "symbol": "useAddNetworkState"
+          },
+          "action": "scroll-to",
+          "narration": "useSafeCreationData is called unconditionally, even when isFeatureEnabled is false. That means RPC calls fire on every dropdown open regardless of the feature flag. The PR description flags this as a known cost, but it is worth considering a short-circuit when the feature is disabled to avoid unnecessary network traffic.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 18,
+          "phase": "risk",
+          "location": {
+            "file": "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.tsx",
+            "line_range": [
+              81,
+              130
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "When loading finishes and availableNetworks is empty but unavailableReason is null, the component returns null with no feedback to the user. That silent empty state could be confusing if the spinner disappears and nothing replaces it. Also note that when error is set but unavailableReason is null, the error is silently swallowed with no UI indication.",
+          "estimated_seconds": 15
+        },
+        {
+          "step": 19,
+          "phase": "wrap",
+          "location": {
+            "file": "apps/web/src/features/multichain/hooks/useAddNetworkState.ts",
+            "line_range": [
+              8,
+              23
+            ],
+            "symbol": "AddNetworkState"
+          },
+          "action": "flick-back",
+          "narration": "The bottom line: this PR replaces a naive chain diff with a proper compatibility gate, surfacing clear error states before the user ever clicks into a broken add-network flow. The main things to verify before merging are the IIFE priority ordering, the unconditional RPC call when the feature is off, and the missing Storybook coverage for unavailable-reason states.",
+          "estimated_seconds": 15
+        }
+      ]
+    },
+    "created_at": 1777031842195
+  },
+  "tour": {
+    "chapters": [
+      {
+        "title": "Why this change",
+        "step_range": [
+          1,
+          2
+        ]
+      },
+      {
+        "title": "The new state hook",
+        "step_range": [
+          3,
+          7
+        ]
+      },
+      {
+        "title": "The new visual section",
+        "step_range": [
+          8,
+          11
+        ]
+      },
+      {
+        "title": "Consumers that had to adapt",
+        "step_range": [
+          12,
+          15
+        ]
+      },
+      {
+        "title": "What can go wrong",
+        "step_range": [
+          16,
+          18
+        ]
+      },
+      {
+        "title": "The bottom line",
+        "step_range": [
+          19,
+          19
+        ]
+      }
+    ],
+    "total_seconds": 255,
+    "steps": [
+      {
+        "step": 1,
+        "phase": "motivation",
+        "location": {
+          "file": "apps/web/src/components/common/SpaceSafeBar/hooks/useSpaceChainSelector.ts",
+          "line_range": [
+            16,
+            35
+          ],
+          "symbol": "useSpaceChainSelector"
+        },
+        "action": "open",
+        "narration": "Here is the root of the problem. The old hook derived available chains by simply subtracting already-deployed chain IDs from the full chain config list. That naive set-difference had no idea whether the Safe was actually compatible with those chains, so incompatible ones slipped through silently.",
+        "estimated_seconds": 15
+      },
+      {
+        "step": 2,
+        "phase": "motivation",
+        "location": {
+          "file": "apps/web/src/components/common/SpaceSafeBar/hooks/useSpaceChainSelector.ts",
+          "line_range": [
+            16,
+            35
+          ],
+          "symbol": "useSpaceChainSelector"
+        },
+        "action": "scroll-to",
+        "narration": "The result was that clicking a chain in the All Networks accordion could silently fail later — outdated mastercopy, zkSync incompatibility, missing creation data. The user got no warning at all. This PR fixes that by moving the eligibility check much earlier in the flow.",
+        "estimated_seconds": 15,
+        "diagram": {
+          "kind": "flowchart",
+          "title": "Before and after the fix",
+          "mermaid": "flowchart TB\n  subgraph Before\n    A1[useSpaceChainSelector] -->|chainConfigs minus deployedChainIds| B1[availableChains]\n    B1 --> C1[All networks accordion]\n    C1 -->|click| D1[add-network dialog]\n    D1 --> E1[silent failure for incompatible Safes]\n  end\n  subgraph After\n    A2[ChainSelectorBlock] --> S[AllNetworksSection]\n    S --> H[useAddNetworkState]\n    H --> H1[useSafeCreationData]\n    H --> H2[useCompatibleNetworks]\n    H --> H3[hasMultiChainAddNetworkFeature]\n    H -->|unavailableReason| R{state?}\n    R -- safe-specific --> M1[Muted info row]\n    R -- outdated-mastercopy --> M2[Muted info row]\n    R -- loading --> M3[Spinner]\n    R -- null --> M4[Accordion with per-chain disabled rows]\n  end"
+        }
+      },
+      {
+        "step": 3,
+        "phase": "change",
+        "location": {
+          "file": "apps/web/src/features/multichain/hooks/useAddNetworkState.ts",
+          "line_range": [
+            8,
+            23
+          ],
+          "symbol": "AddNetworkState"
+        },
+        "action": "open",
+        "narration": "The centrepiece of this PR is the new useAddNetworkState hook, and it starts with its type contract. AddNetworkUnavailableReason is a union of safe-specific and outdated-mastercopy, and AddNetworkState bundles loading, availableNetworks, that reason, an error, and a feature-enabled flag into one object.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 4,
+        "phase": "change",
+        "location": {
+          "file": "apps/web/src/features/multichain/hooks/useAddNetworkState.ts",
+          "line_range": [
+            25,
+            55
+          ],
+          "symbol": "useAddNetworkState"
+        },
+        "action": "scroll-to",
+        "narration": "The hook itself calls useSafeCreationData and useCompatibleNetworks, then filters the compatible list down to chains where hasMultiChainAddNetworkFeature is true and the chain is not already deployed. This is the real eligibility check that was missing before.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 5,
+        "phase": "change",
+        "location": {
+          "file": "apps/web/src/features/multichain/hooks/useAddNetworkState.ts",
+          "line_range": [
+            56,
+            90
+          ],
+          "symbol": "useAddNetworkState"
+        },
+        "action": "scroll-to",
+        "narration": "The unavailableReason is resolved through a short-circuit IIFE. A creation data error maps to safe-specific; an empty compatible list maps to outdated-mastercopy; all networks being unavailable also maps to safe-specific. When a reason is set, availableNetworks is forced to an empty array so callers never see a partial list alongside an error.",
+        "estimated_seconds": 15
+      },
+      {
+        "step": 6,
+        "phase": "change",
+        "location": {
+          "file": "apps/web/src/features/multichain/hooks/__tests__/useAddNetworkState.test.ts",
+          "line_range": [
+            1,
+            50
+          ],
+          "symbol": "useAddNetworkState"
+        },
+        "action": "open",
+        "narration": "The test file covers eight scenarios: happy path filtering, creation data error, empty compatible networks, all chains unavailable, feature flag off, feature flag filtering on target chains, already-deployed exclusion, and loading state propagation. That is solid coverage of every branch in the IIFE.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 7,
+        "phase": "change",
+        "location": {
+          "file": "apps/web/src/features/multichain/hooks/index.ts",
+          "line_range": [
+            1,
+            10
+          ]
+        },
+        "action": "open",
+        "narration": "The hooks barrel re-exports useAddNetworkState and its three companion types, making them part of the public multichain feature API. The main multichain index then re-exports them again so any consumer can import from the top-level feature path.",
+        "callouts": [
+          {
+            "file": "apps/web/src/features/multichain/index.ts",
+            "line": 1,
+            "note": "top-level barrel re-export"
+          }
+        ],
+        "estimated_seconds": 11
+      },
+      {
+        "step": 8,
+        "phase": "change",
+        "location": {
+          "file": "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.tsx",
+          "line_range": [
+            16,
+            35
+          ],
+          "symbol": "AllNetworksSectionProps"
+        },
+        "action": "open",
+        "narration": "AllNetworksSection is the new visual owner of the All Networks area. Its props are simple: safeAddress, deployedChainIds, and an onAddNetwork callback. It calls useAddNetworkState internally and decides which of the four render states to show.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 9,
+        "phase": "change",
+        "location": {
+          "file": "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.tsx",
+          "line_range": [
+            36,
+            80
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "The first two guard clauses handle the easy cases: if the feature is disabled the component returns null, and if unavailableReason is set it renders a muted info row. When the reason is safe-specific and an error message exists, the info icon becomes a tooltip trigger showing that raw message.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 10,
+        "phase": "change",
+        "location": {
+          "file": "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.tsx",
+          "line_range": [
+            81,
+            130
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "Past the error guards, a loading state shows a centred spinner. Then comes the accordion itself, where each chain row checks the available flag from useCompatibleNetworks. Incompatible chains render as a disabled button labelled Not available and cannot fire onAddNetwork.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 11,
+        "phase": "change",
+        "location": {
+          "file": "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.test.tsx",
+          "line_range": [
+            1,
+            50
+          ]
+        },
+        "action": "open",
+        "narration": "The component test mocks useAddNetworkState and exercises all render branches, including analytics: SHOW_ALL_NETWORKS fires only on expand, and ADD_NEW_NETWORK fires with the top-bar label on a successful chain click. Disabled chain rows are confirmed to not fire the callback.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 12,
+        "phase": "ripple",
+        "location": {
+          "file": "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/ChainSelectorBlock.tsx",
+          "line_range": [
+            9,
+            30
+          ],
+          "symbol": "ChainSelectorBlockProps"
+        },
+        "action": "open",
+        "narration": "ChainSelectorBlock is the first consumer that had to adapt. Its prop contract drops availableChains and gains safeAddress plus deployedChainIds. The inline accordion markup is replaced by a single AllNetworksSection element, forwarding those two props and the onAddNetwork callback.",
+        "callouts": [
+          {
+            "file": "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.tsx",
+            "line": 16,
+            "note": "receives safeAddress + deployedChainIds here"
+          }
+        ],
+        "estimated_seconds": 14
+      },
+      {
+        "step": 13,
+        "phase": "ripple",
+        "location": {
+          "file": "apps/web/src/components/common/SpaceSafeBar/SpaceChainSelector.tsx",
+          "line_range": [
+            1,
+            40
+          ]
+        },
+        "action": "open",
+        "narration": "SpaceChainSelector no longer destructures availableChains from useSpaceChainSelector. Instead it passes safeAddress and deployedChainIds straight down to ChainSelectorBlock. The chain-diffing logic is gone from this layer entirely.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 14,
+        "phase": "ripple",
+        "location": {
+          "file": "apps/web/src/components/common/SpaceSafeBar/hooks/useSpaceChainSelector.ts",
+          "line_range": [
+            16,
+            35
+          ],
+          "symbol": "useSpaceChainSelector"
+        },
+        "action": "jump-to-definition",
+        "narration": "Back in the hook, the useMemo that computed availableChains is simply deleted. The hook's return type no longer includes that field, so any undiscovered caller that still destructures it would silently receive undefined — worth a quick search to be sure.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 15,
+        "phase": "ripple",
+        "location": {
+          "file": "apps/web/src/components/common/SpaceSafeBar/SpaceChainSelector.stories.tsx",
+          "line_range": [
+            47,
+            90
+          ],
+          "symbol": "SingleChain"
+        },
+        "action": "flick-back",
+        "narration": "The stories file swaps availableChains for safeAddress and deployedChainIds on both the SingleChain and MultiChain stories, and removes the NoAvailableChains story entirely. That last deletion is worth noting: there is no replacement story covering the unavailable-reason visual states in Storybook.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 16,
+        "phase": "risk",
+        "location": {
+          "file": "apps/web/src/features/multichain/hooks/useAddNetworkState.ts",
+          "line_range": [
+            56,
+            90
+          ],
+          "symbol": "useAddNetworkState"
+        },
+        "action": "scroll-to",
+        "narration": "Watch the IIFE evaluation order carefully. safeCreationError is checked before noAvailableNetworks, which is checked before isUnsupportedSafeCreationVersion. That means outdated-mastercopy can never be returned when a creation error is also present — the safe-specific reason wins. Confirm this ordering is intentional and not an accidental priority inversion.",
+        "estimated_seconds": 15
+      },
+      {
+        "step": 17,
+        "phase": "risk",
+        "location": {
+          "file": "apps/web/src/features/multichain/hooks/useAddNetworkState.ts",
+          "line_range": [
+            25,
+            55
+          ],
+          "symbol": "useAddNetworkState"
+        },
+        "action": "scroll-to",
+        "narration": "useSafeCreationData is called unconditionally, even when isFeatureEnabled is false. That means RPC calls fire on every dropdown open regardless of the feature flag. The PR description flags this as a known cost, but it is worth considering a short-circuit when the feature is disabled to avoid unnecessary network traffic.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 18,
+        "phase": "risk",
+        "location": {
+          "file": "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.tsx",
+          "line_range": [
+            81,
+            130
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "When loading finishes and availableNetworks is empty but unavailableReason is null, the component returns null with no feedback to the user. That silent empty state could be confusing if the spinner disappears and nothing replaces it. Also note that when error is set but unavailableReason is null, the error is silently swallowed with no UI indication.",
+        "estimated_seconds": 15
+      },
+      {
+        "step": 19,
+        "phase": "wrap",
+        "location": {
+          "file": "apps/web/src/features/multichain/hooks/useAddNetworkState.ts",
+          "line_range": [
+            8,
+            23
+          ],
+          "symbol": "AddNetworkState"
+        },
+        "action": "flick-back",
+        "narration": "The bottom line: this PR replaces a naive chain diff with a proper compatibility gate, surfacing clear error states before the user ever clicks into a broken add-network flow. The main things to verify before merging are the IIFE priority ordering, the unconditional RPC call when the feature is off, and the missing Storybook coverage for unavailable-reason states.",
+        "estimated_seconds": 15
+      }
+    ]
+  },
+  "markdown": "# PR Briefing — #7734: feat: optimize chain selector\n\n**Repo:** `safe-global/safe-wallet-monorepo`  \n**Author:** ChillYao  \n**Branch:** `dev` ← `implementChainSelectorBlocker` (`c51ca4d`)  \n**URL:** https://github.com/safe-global/safe-wallet-monorepo/pull/7734\n\n## Summary\n\nThis PR fixes the Space safe bar's chain selector ('All networks' accordion) which previously listed every non-deployed chain regardless of whether the Safe could actually be added to it, leading to silent failures for incompatible Safes (outdated mastercopy, zkSync/Lens, etc.). A new shared hook `useAddNetworkState` is introduced under `@/features/multichain` that composes `useSafeCreationData`, `useCompatibleNetworks`, and `hasMultiChainAddNetworkFeature` to produce a typed state object with `unavailableReason`, `availableNetworks`, and `loading`. A new `AllNetworksSection` component consumes this hook and renders one of four states: nothing (feature disabled), a muted info row with optional tooltip (unavailable reason), a spinner (loading), or the accordion with per-chain disabled rows for incompatible chains. `ChainSelectorBlock` drops its `availableChains` prop in favour of `safeAddress` + `deployedChainIds`, and `useSpaceChainSelector` removes its naive set-difference derivation entirely.\n\n## Architecture notes\n\nThe data flow now runs: `SpaceChainSelector` → `ChainSelectorBlock` (passes `safeAddress` + `deployedChainIds`) → `AllNetworksSection` → `useAddNetworkState` → `useSafeCreationData` + `useCompatibleNetworks` + `hasMultiChainAddNetworkFeature`. This means `useSafeCreationData` (which hits RPCs across all deployed chains) now fires on every dropdown open rather than only when the add-network dialog is opened, which is a new performance cost. The `availableChains` field is removed from `useSpaceChainSelector`'s return type and from `ChainSelectorBlock`'s prop contract; any undiscovered caller would silently receive `undefined`. New public exports (`useAddNetworkState`, `AddNetworkState`, `AddNetworkUnavailableReason`, `AvailableNetwork`) are added to the `@/features/multichain` barrel via both `hooks/index.ts` and `features/multichain/index.ts`.\n\n## Ripple risks\n\nAnalyzed 5 changed exports. No untouched external callers found — all usages appear to be inside the PR diff.\n\n_Analyzed 12 file(s), 10 changed export(s), 0 uncovered callsite(s) in 2.2s._\n\n## Walkthrough outline\n\n_19 steps across 6 chapters, approximately 4 min 15s._\n\n### Why this change\n\n1. **motivation** · `apps/web/src/components/common/SpaceSafeBar/hooks/useSpaceChainSelector.ts` L16-35 `useSpaceChainSelector`\n   Here is the root of the problem. The old hook derived available chains by simply subtracting already-deployed chain IDs from the full chain config list. That naive set-difference had no idea whether the Safe was actually compatible with those chains, so incompatible ones slipped through silently.\n\n2. **motivation** · `apps/web/src/components/common/SpaceSafeBar/hooks/useSpaceChainSelector.ts` L16-35 `useSpaceChainSelector`\n   The result was that clicking a chain in the All Networks accordion could silently fail later — outdated mastercopy, zkSync incompatibility, missing creation data. The user got no warning at all. This PR fixes that by moving the eligibility check much earlier in the flow.\n\n### The new state hook\n\n3. **change** · `apps/web/src/features/multichain/hooks/useAddNetworkState.ts` L8-23 `AddNetworkState`\n   The centrepiece of this PR is the new useAddNetworkState hook, and it starts with its type contract. AddNetworkUnavailableReason is a union of safe-specific and outdated-mastercopy, and AddNetworkState bundles loading, availableNetworks, that reason, an error, and a feature-enabled flag into one object.\n\n4. **change** · `apps/web/src/features/multichain/hooks/useAddNetworkState.ts` L25-55 `useAddNetworkState`\n   The hook itself calls useSafeCreationData and useCompatibleNetworks, then filters the compatible list down to chains where hasMultiChainAddNetworkFeature is true and the chain is not already deployed. This is the real eligibility check that was missing before.\n\n5. **change** · `apps/web/src/features/multichain/hooks/useAddNetworkState.ts` L56-90 `useAddNetworkState`\n   The unavailableReason is resolved through a short-circuit IIFE. A creation data error maps to safe-specific; an empty compatible list maps to outdated-mastercopy; all networks being unavailable also maps to safe-specific. When a reason is set, availableNetworks is forced to an empty array so callers never see a partial list alongside an error.\n\n6. **change** · `apps/web/src/features/multichain/hooks/__tests__/useAddNetworkState.test.ts` L1-50 `useAddNetworkState`\n   The test file covers eight scenarios: happy path filtering, creation data error, empty compatible networks, all chains unavailable, feature flag off, feature flag filtering on target chains, already-deployed exclusion, and loading state propagation. That is solid coverage of every branch in the IIFE.\n\n7. **change** · `apps/web/src/features/multichain/hooks/index.ts` L1-10\n   The hooks barrel re-exports useAddNetworkState and its three companion types, making them part of the public multichain feature API. The main multichain index then re-exports them again so any consumer can import from the top-level feature path.\n\n### The new visual section\n\n8. **change** · `apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.tsx` L16-35 `AllNetworksSectionProps`\n   AllNetworksSection is the new visual owner of the All Networks area. Its props are simple: safeAddress, deployedChainIds, and an onAddNetwork callback. It calls useAddNetworkState internally and decides which of the four render states to show.\n\n9. **change** · `apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.tsx` L36-80\n   The first two guard clauses handle the easy cases: if the feature is disabled the component returns null, and if unavailableReason is set it renders a muted info row. When the reason is safe-specific and an error message exists, the info icon becomes a tooltip trigger showing that raw message.\n\n10. **change** · `apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.tsx` L81-130\n   Past the error guards, a loading state shows a centred spinner. Then comes the accordion itself, where each chain row checks the available flag from useCompatibleNetworks. Incompatible chains render as a disabled button labelled Not available and cannot fire onAddNetwork.\n\n11. **change** · `apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.test.tsx` L1-50\n   The component test mocks useAddNetworkState and exercises all render branches, including analytics: SHOW_ALL_NETWORKS fires only on expand, and ADD_NEW_NETWORK fires with the top-bar label on a successful chain click. Disabled chain rows are confirmed to not fire the callback.\n\n### Consumers that had to adapt\n\n12. **ripple** · `apps/web/src/features/spaces/components/SafeSelectorDropdown/components/ChainSelectorBlock.tsx` L9-30 `ChainSelectorBlockProps`\n   ChainSelectorBlock is the first consumer that had to adapt. Its prop contract drops availableChains and gains safeAddress plus deployedChainIds. The inline accordion markup is replaced by a single AllNetworksSection element, forwarding those two props and the onAddNetwork callback.\n\n13. **ripple** · `apps/web/src/components/common/SpaceSafeBar/SpaceChainSelector.tsx` L1-40\n   SpaceChainSelector no longer destructures availableChains from useSpaceChainSelector. Instead it passes safeAddress and deployedChainIds straight down to ChainSelectorBlock. The chain-diffing logic is gone from this layer entirely.\n\n14. **ripple** · `apps/web/src/components/common/SpaceSafeBar/hooks/useSpaceChainSelector.ts` L16-35 `useSpaceChainSelector`\n   Back in the hook, the useMemo that computed availableChains is simply deleted. The hook's return type no longer includes that field, so any undiscovered caller that still destructures it would silently receive undefined — worth a quick search to be sure.\n\n15. **ripple** · `apps/web/src/components/common/SpaceSafeBar/SpaceChainSelector.stories.tsx` L47-90 `SingleChain`\n   The stories file swaps availableChains for safeAddress and deployedChainIds on both the SingleChain and MultiChain stories, and removes the NoAvailableChains story entirely. That last deletion is worth noting: there is no replacement story covering the unavailable-reason visual states in Storybook.\n\n### What can go wrong\n\n16. **risk** · `apps/web/src/features/multichain/hooks/useAddNetworkState.ts` L56-90 `useAddNetworkState`\n   Watch the IIFE evaluation order carefully. safeCreationError is checked before noAvailableNetworks, which is checked before isUnsupportedSafeCreationVersion. That means outdated-mastercopy can never be returned when a creation error is also present — the safe-specific reason wins. Confirm this ordering is intentional and not an accidental priority inversion.\n\n17. **risk** · `apps/web/src/features/multichain/hooks/useAddNetworkState.ts` L25-55 `useAddNetworkState`\n   useSafeCreationData is called unconditionally, even when isFeatureEnabled is false. That means RPC calls fire on every dropdown open regardless of the feature flag. The PR description flags this as a known cost, but it is worth considering a short-circuit when the feature is disabled to avoid unnecessary network traffic.\n\n18. **risk** · `apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.tsx` L81-130\n   When loading finishes and availableNetworks is empty but unavailableReason is null, the component returns null with no feedback to the user. That silent empty state could be confusing if the spinner disappears and nothing replaces it. Also note that when error is set but unavailableReason is null, the error is silently swallowed with no UI indication.\n\n### The bottom line\n\n19. **wrap** · `apps/web/src/features/multichain/hooks/useAddNetworkState.ts` L8-23 `AddNetworkState`\n   The bottom line: this PR replaces a naive chain diff with a proper compatibility gate, surfacing clear error states before the user ever clicks into a broken add-network flow. The main things to verify before merging are the IIFE priority ordering, the unconditional RPC call when the feature is off, and the missing Storybook coverage for unavailable-reason states.\n\n## Reviewer checklist\n\n- [ ] Verify `ChainSelectorBlock` TypeScript prop types have `availableChains` fully removed and `safeAddress`/`deployedChainIds` added, and confirm no other caller in the codebase still passes `availableChains` or destructures it from `useSpaceChainSelector`.\n- [ ] Audit the `useAddNetworkState` IIFE logic ordering: confirm that the `outdated-mastercopy` reason can actually be reached when `safeCreationError` is also set, and that an entirely empty `allCompatibleChains` list (not just all-unavailable) is correctly handled.\n- [ ] Check that `useSafeCreationData` is not called (or is short-circuited) when `isFeatureEnabled` is false, to avoid unnecessary RPC calls on every selector open for chains where the feature is disabled.\n- [ ] Confirm `AllNetworksSection` returns a visible empty/null state (not a silent blank) when loading finishes with zero available networks, so users are not left with an unexplained empty area.\n- [ ] Validate that the `SHOW_ALL_NETWORKS` analytics event fires only on accordion expand (not collapse) by checking the `handleAccordionChange` cast from `unknown` to `string[]` — ensure the Accordion component actually passes an array and that `openedIds.includes('all-networks')` behaves correctly.\n- [ ] Manually open the chain selector for a Safe with an outdated mastercopy and for a healthy multichain-eligible Safe to confirm the correct UI state renders in each case, and that clicking a disabled chain row does not trigger `onAddNetwork`.\n\n## File-by-file\n\n### `apps/web/src/components/common/SpaceSafeBar/SpaceChainSelector.stories.tsx`\n\nThe stories file removes the static `availableChains` array and the `NoAvailableChains` story, replacing `availableChains` prop with `safeAddress` and `deployedChainIds` props on `ChainSelectorBlock` in both `SingleChain` and `MultiChain` stories. The comment is updated to note that `useAddNetworkState` now drives the 'All networks' section dynamically.\n\n_Likely reflects the prop contract change on `ChainSelectorBlock` where static chain derivation is replaced by hook-driven logic, requiring stories to supply `safeAddress`/`deployedChainIds` instead of a pre-computed list._\n\n**Risks:**\n- The `NoAvailableChains` story is deleted entirely — there is no replacement story covering the 'no available chains' / unavailable-reason visual states, reducing Storybook coverage for error/empty states\n- The stub `safeAddress` values (0x000...001, 0x000...002) may not trigger realistic `useAddNetworkState` behavior in the mocked scenario; reviewers should confirm the mock scenario resolves hooks correctly\n- If `useAddNetworkState` makes real RPC calls inside the Portal-rendered content, Storybook renders may hang or show spinners indefinitely without proper mocking\n\n### `apps/web/src/components/common/SpaceSafeBar/SpaceChainSelector.test.tsx`\n\nThe test file updates the `ChainSelectorBlock` mock to accept and render `safeAddress` and `deployedChainIds` props (via `data-*` attributes), removes `availableChains` from all `mockUseSpaceChainSelector` return values, and adds a new test case asserting those two props are correctly forwarded to `ChainSelectorBlock`.\n\n_Reflects the prop contract change where `ChainSelectorBlock` no longer receives `availableChains` but instead receives `safeAddress` and `deployedChainIds` to self-manage network availability logic._\n\n**Risks:**\n- Verify the real `ChainSelectorBlock` component signature matches the updated mock — if the prop names diverge the tests pass but the component silently receives wrong props\n- Check that all other callers of `useSpaceChainSelector` that previously consumed `availableChains` have been updated; the test removal of `availableChains` from mock returns only proves the test compiles, not that no production code still reads it\n- The new test only checks attribute presence/value, not that `safeAddress`/`deployedChainIds` are actually used to gate network availability — consider whether a higher-level integration test is needed\n\n### `apps/web/src/components/common/SpaceSafeBar/SpaceChainSelector.tsx`\n\nSpaceChainSelector removes `availableChains` from the destructured `useSpaceChainSelector` return value and stops passing it as a prop to `ChainSelectorBlock`, instead passing `safeAddress` and `deployedChainIds` directly to `ChainSelectorBlock`.\n\n_Shifts responsibility for computing available networks from the call site into `ChainSelectorBlock` (via `AllNetworksSection`/`useAddNetworkState`), enabling proper compatibility checks rather than a naive set-difference._\n\n**Risks:**\n- Verify `ChainSelectorBlock` prop types were updated to accept `safeAddress`+`deployedChainIds` and remove `availableChains`\n- Confirm `useSpaceChainSelector` no longer exports `availableChains` and that no other consumer depends on it\n- Check that `deployedChainIds` was already available in `useSpaceChainSelector` return or was newly added\n\n### `apps/web/src/components/common/SpaceSafeBar/hooks/useSpaceChainSelector.test.ts`\n\nRemoved two test cases from `useSpaceChainSelector.test.ts` that verified the `availableChains` return value — specifically the tests asserting that `availableChains` excludes already-deployed chain IDs for both single-chain and multi-chain Safes.\n\n_The `availableChains` property was removed from `useSpaceChainSelector`'s return shape as part of moving that logic into `useAddNetworkState`/`AllNetworksSection`, so the tests covering it are no longer applicable._\n\n**Risks:**\n- Verify that `availableChains` is fully removed from `useSpaceChainSelector` return type and not silently still exported/consumed elsewhere\n- Confirm equivalent coverage of the 'exclude deployed chains' logic now exists in `useAddNetworkState` tests so there is no net loss of test coverage\n- Check that no other callers of `useSpaceChainSelector` still destructure `availableChains` and silently receive `undefined`\n\n### `apps/web/src/components/common/SpaceSafeBar/hooks/useSpaceChainSelector.ts`\n\nRemoves the `availableChains` derived state (a naive `chainConfigs − deployedChainIds` diff) from `useSpaceChainSelector`, along with its `useMemo` and its inclusion in the hook's return value.\n\n_The naive diff was over-permissive, listing every non-deployed chain regardless of compatibility; responsibility for computing available chains is moved to `AllNetworksSection`/`useAddNetworkState` which performs proper compatibility checks._\n\n**Risks:**\n- Verify all callers of `useSpaceChainSelector` no longer reference `availableChains` — a missed destructure would silently be `undefined`\n- Confirm `ChainSelectorBlock` prop contract was updated in lockstep to remove `availableChains` prop\n- Check that no TypeScript type for the hook's return value still declares `availableChains`\n\n### `apps/web/src/features/multichain/hooks/__tests__/useAddNetworkState.test.ts`\n\nAdds a new test file for `useAddNetworkState` hook covering 8 scenarios: happy path filtering, creation data error (`safe-specific`), empty compatible networks (`outdated-mastercopy`), all chains unavailable (`safe-specific`), feature flag disabled on current chain, feature flag filtering on target chains, already-deployed chain exclusion, and loading state propagation.\n\n_Validates the core logic of the new shared hook that gates which chains appear in the Space chain selector, ensuring the correct `unavailableReason` is set under each failure mode._\n\n**Risks:**\n- Test for 'all compatible chains unavailable' expects `unavailableReason='safe-specific'` but the compatible list includes the current chain (chainId '1') which is already deployed — verify the hook correctly handles this edge case vs a truly empty post-filter list\n- No test covers the case where `compatible` contains a mix of available and unavailable chains (partial availability) — the hook's behavior in that scenario is untested\n- The `setupDefaults` mock for `useCompatibleNetworks` returns all `configs` including the already-deployed chain; tests rely on the hook itself filtering by `deployedChainIds`, so if that filtering is missing the assertions would still pass incorrectly\n- Loading state test with `compatible: []` expects `unavailableReason` to stay null — confirm the hook checks `loading` before evaluating empty compatible list to avoid a race condition\n\n### `apps/web/src/features/multichain/hooks/index.ts`\n\nAdds two new exports from `apps/web/src/features/multichain/hooks/index.ts`: the `useAddNetworkState` hook and three TypeScript types (`AddNetworkState`, `AddNetworkUnavailableReason`, `AvailableNetwork`) from the new `./useAddNetworkState` module.\n\n_Makes the new hook and its types part of the public API of the `@/features/multichain` barrel so downstream consumers like `AllNetworksSection` can import them without reaching into internal paths._\n\n**Risks:**\n- Verify `./useAddNetworkState` file actually exists and exports all three named types to avoid build-time errors\n- Check that no existing consumer was already importing these identifiers from a different path, which could cause duplicate-export conflicts\n\n### `apps/web/src/features/multichain/hooks/useAddNetworkState.ts`\n\nNew hook `useAddNetworkState(safeAddress, deployedChainIds)` added that composes `useSafeCreationData`, `useCompatibleNetworks`, and `hasMultiChainAddNetworkFeature` to return a unified `AddNetworkState` object with `loading`, `availableNetworks`, `unavailableReason`, `error`, and `isFeatureEnabled` fields.\n\n_Centralises the eligibility logic for adding a Safe to a new network so that UI components can show accurate error states instead of silently failing when a Safe is incompatible._\n\n**Risks:**\n- Logic conflict: `noAvailableNetworks` is true only when `availableNetworks.length > 0 && every(!available)`, but `isUnsupportedSafeCreationVersion` checks `safeCreationData && !allCompatibleChains?.length`. The IIFE evaluates `safeCreationError` before `noAvailableNetworks` before `isUnsupportedSafeCreationVersion`, so `outdated-mastercopy` can never be returned if there is also a `safeCreationError` — verify this ordering is intentional.\n- `noAvailableNetworks` condition requires `availableNetworks.length > 0` (non-empty) AND all unavailable, meaning a list that is entirely empty (no compatible chains at all) does NOT trigger 'safe-specific' via this path — only `isUnsupportedSafeCreationVersion` or `safeCreationError` would catch it; confirm empty-list case is handled.\n- `availableNetworks` is filtered to chains where `hasMultiChainAddNetworkFeature(config)` is true, but the `AvailableNetwork` type includes an `available: boolean` field that is never explicitly set here — it must come from `useCompatibleNetworks` returning `Chain & { available: boolean }`; verify the upstream type actually carries this field.\n- When `unavailableReason` is non-null, `availableNetworks` is forced to `[]`, discarding potentially useful data; callers relying on the list for any secondary purpose will get nothing.\n- `useSafeCreationData` is called unconditionally even when `isFeatureEnabled` is false, causing unnecessary RPC calls; consider short-circuiting when the feature is disabled.\n\n### `apps/web/src/features/multichain/index.ts`\n\nThe `multichain` index re-exports `useAddNetworkState` function and three new types (`AddNetworkState`, `AddNetworkUnavailableReason`, `AvailableNetwork`) from `./hooks`.\n\n_Exposes the new shared hook and its types as part of the public `@/features/multichain` API so consumers like `AllNetworksSection` can import them without reaching into internal paths._\n\n**Risks:**\n- Verify that `useAddNetworkState`, `AddNetworkState`, `AddNetworkUnavailableReason`, and `AvailableNetwork` are actually exported from `./hooks` (i.e., the hooks barrel file re-exports them correctly) to avoid silent undefined exports.\n- Check no circular dependency is introduced by adding these exports to the index.\n\n### `apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.test.tsx`\n\nNew test file `AllNetworksSection.test.tsx` added with 232 lines covering all render states of the `AllNetworksSection` component: feature disabled, safe-specific unavailability, outdated-mastercopy, loading spinner, empty available networks, accordion expansion, per-chain add buttons, disabled chains (`available=false`), and analytics events (`SHOW_ALL_NETWORKS`, `ADD_NEW_NETWORK`).\n\n_Provides unit-test coverage for the new `AllNetworksSection` component and its integration with `useAddNetworkState`, ensuring the gating logic and analytics fire correctly before the component ships._\n\n**Risks:**\n- Tests mock `useAddNetworkState` entirely — no integration coverage of the actual hook logic; bugs in hook composition won't be caught here.\n- The 'renders nothing when there are no available networks and no error' case (feature enabled, no reason, empty list) expects an empty DOM — verify the real component actually returns null in this state and not a wrapper element.\n- Accordion expand/collapse relies on `fireEvent.click(screen.getByText('All networks'))` — if the accordion trigger text changes or is wrapped in a non-interactive element, tests will silently pass without exercising the accordion.\n- Tooltip presence is asserted via `data-testid='chain-selector-unavailable-tooltip'` — confirm the production component actually sets this testid on the tooltip trigger, not just the tooltip content.\n- No test covers the case where `error` is present but `unavailableReason` is NOT `safe-specific` — unclear if tooltip should appear in that scenario.\n- Analytics test clears mock between expand and collapse but does not reset between describe blocks; `beforeEach(jest.resetAllMocks)` at the top level should handle it, but nested `beforeEach` in the analytics block does not call `mockTrack.mockClear()` before each analytics test, relying on outer reset.\n\n### `apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.tsx`\n\nNew `AllNetworksSection` component added that consumes `useAddNetworkState(safeAddress, deployedChainIds)` and renders one of four states: null (feature disabled), a muted info row with optional tooltip (unavailableReason set), a spinner (loading), or an accordion listing available networks with disabled rows for incompatible chains.\n\n_Replaces the naive chain-diffing approach in `ChainSelectorBlock`/`useSpaceChainSelector` with a gated, compatibility-aware UI that prevents users from clicking into a broken add-network flow for ineligible Safes._\n\n**Risks:**\n- handleAccordionChange casts `value` to `unknown` then `string[]` — if the Accordion component passes a single string instead of an array, `openedIds.includes('all-networks')` will always be false and the analytics event will never fire\n- onClick guard `!disabled && handleChainClick(...)` is redundant with the `disabled` attribute on the button but harmless; verify the button's disabled state actually prevents synthetic click events in all target browsers\n- Tooltip is only shown when `error?.message` is truthy, but `unavailableReason` could be 'safe-specific' with no error — confirm UX intent that the info icon is non-interactive in that case\n- TooltipTrigger uses a `render` prop pattern with a raw `<span>` — verify this matches the actual Tooltip API in use; misuse could silently drop the trigger\n- availableNetworks.length === 0 returns null after the loading check, meaning a successfully resolved but empty list is invisible with no feedback — could confuse users if loading finishes with zero results\n- No error boundary or explicit error state rendered when `error` is set but `unavailableReason` is null — error may be silently swallowed\n\n### `apps/web/src/features/spaces/components/SafeSelectorDropdown/components/ChainSelectorBlock.tsx`\n\nChainSelectorBlock's inline 'All networks' accordion (with naive availableChains prop) is replaced by a new AllNetworksSection component. The prop availableChains is removed and replaced with safeAddress + deployedChainIds, which are forwarded to AllNetworksSection.\n\n_Delegates network availability logic to AllNetworksSection/useAddNetworkState so only genuinely compatible chains are shown, preventing users from clicking chains that would silently fail._\n\n**Risks:**\n- Verify all callers of ChainSelectorBlock have been updated to pass safeAddress and deployedChainIds instead of availableChains\n- handleAddNetworkClick is now passed to AllNetworksSection — confirm analytics events (ADD_NEW_NETWORK) still fire correctly through this indirection\n- ChainLogo and Plus imports removed; confirm Plus is not needed elsewhere in this file\n- AllNetworksSection is a new component — its error/loading/unavailable states need independent review for correctness and accessibility\n\n---\n_Generated by prbrief • model: claude-sonnet-4-6 • 14 LLM calls • $0.25 • 129.6s_",
+  "files": {
+    "apps/web/src/components/common/SpaceSafeBar/hooks/useSpaceChainSelector.ts": "import { useCallback, useMemo } from 'react'\nimport { useRouter } from 'next/router'\nimport { useSpaceSafes } from '@/features/spaces'\nimport { isMultiChainSafeItem } from '@/hooks/safes'\nimport useSafeInfo from '@/hooks/useSafeInfo'\nimport useChainId from '@/hooks/useChainId'\nimport useChains from '@/hooks/useChains'\nimport { AppRoutes } from '@/config/routes'\nimport { trackEvent } from '@/services/analytics'\nimport { SPACE_EVENTS } from '@/services/analytics/events/spaces'\nimport { MixpanelEventParams } from '@/services/analytics/mixpanel-events'\nimport { useCurrentSpaceId } from '@/features/spaces'\nimport { sameAddress } from '@safe-global/utils/utils/addresses'\nimport type { ChainInfo } from '@/features/spaces/types'\n\nexport function useSpaceChainSelector() {\n  const { allSafes } = useSpaceSafes()\n  const { safeAddress } = useSafeInfo()\n  const selectedChainId = useChainId()\n  const { configs: chainConfigs } = useChains()\n  const router = useRouter()\n  const spaceId = useCurrentSpaceId()\n\n  const { deployedChains, deployedChainIds, safeName } = useMemo(() => {\n    const currentSafe = allSafes.find((s) => sameAddress(s.address, safeAddress))\n\n    if (!currentSafe)\n      return { deployedChains: [] as ChainInfo[], deployedChainIds: [] as string[], safeName: undefined }\n\n    const chainIds = isMultiChainSafeItem(currentSafe) ? currentSafe.safes.map((s) => s.chainId) : [currentSafe.chainId]\n\n    const resolvedChains: ChainInfo[] = chainIds.map((id) => {\n      const chain = chainConfigs.find((c) => c.chainId === id)\n      return {\n        chainId: id,\n        chainName: chain?.chainName ?? id,\n        chainLogoUri: chain?.chainLogoUri ?? null,\n        shortName: chain?.shortName ?? id,\n      }\n    })\n\n    return { deployedChains: resolvedChains, deployedChainIds: chainIds, safeName: currentSafe.name }\n  }, [allSafes, safeAddress, chainConfigs])\n\n  const handleChainChange = useCallback(\n    (chainId: string) => {\n      const chain = chainConfigs.find((c) => c.chainId === chainId)\n      if (!chain) return\n      trackEvent(\n        { ...SPACE_EVENTS.CHAIN_SWITCHED, label: spaceId ?? undefined },\n        {\n          spaceId,\n          [MixpanelEventParams.SAFE_ADDRESS]: safeAddress,\n          [MixpanelEventParams.CHAIN_ID]: chainId,\n        },\n      )\n      router.push({ pathname: AppRoutes.home, query: { safe: `${chain.shortName}:${safeAddress}` } })\n    },\n    [chainConfigs, router, safeAddress, spaceId],\n  )\n\n  return {\n    deployedChains,\n    selectedChainId,\n    deployedChainIds,\n    safeAddress,\n    safeName,\n    handleChainChange,\n  }\n}\n",
+    "apps/web/src/features/multichain/hooks/useAddNetworkState.ts": "import { useMemo } from 'react'\nimport useChains, { useCurrentChain } from '@/hooks/useChains'\nimport { useCompatibleNetworks } from '@safe-global/utils/features/multichain/hooks/useCompatibleNetworks'\nimport type { Chain } from '@safe-global/store/gateway/AUTO_GENERATED/chains'\nimport { hasMultiChainAddNetworkFeature } from '../utils'\nimport { useSafeCreationData } from './useSafeCreationData'\n\nexport type AddNetworkUnavailableReason = 'safe-specific' | 'outdated-mastercopy'\n\nexport type AvailableNetwork = Chain & { available: boolean }\n\nexport interface AddNetworkState {\n  /** True while the Safe creation data is being fetched. */\n  loading: boolean\n  /** Target chains that can technically receive this Safe. Empty when the Safe cannot be added to any network. */\n  availableNetworks: AvailableNetwork[]\n  /** Non-null when the user should be shown a \"cannot add\" message instead of the chain list. */\n  unavailableReason: AddNetworkUnavailableReason | null\n  /** Underlying creation-data error, when any. Surface its message as a tooltip if needed. */\n  error?: Error\n  /** Whether the current (origin) chain supports the add-network feature at all. */\n  isFeatureEnabled: boolean\n}\n\nexport function useAddNetworkState(safeAddress: string, deployedChainIds: string[]): AddNetworkState {\n  const { configs } = useChains()\n  const currentChain = useCurrentChain()\n  const isFeatureEnabled = hasMultiChainAddNetworkFeature(currentChain)\n\n  const deployedChainConfigs = useMemo(\n    () => configs.filter((c) => deployedChainIds.includes(c.chainId)),\n    [configs, deployedChainIds],\n  )\n\n  const [safeCreationData, safeCreationError, safeCreationLoading] = useSafeCreationData(\n    safeAddress,\n    deployedChainConfigs,\n  )\n\n  const allCompatibleChains = useCompatibleNetworks(safeCreationData, configs)\n\n  const availableNetworks = useMemo<AvailableNetwork[]>(\n    () =>\n      allCompatibleChains?.filter(\n        (config) => !deployedChainIds.includes(config.chainId) && hasMultiChainAddNetworkFeature(config),\n      ) ?? [],\n    [allCompatibleChains, deployedChainIds],\n  )\n\n  const noAvailableNetworks = availableNetworks.length > 0 && availableNetworks.every((c) => !c.available)\n  const isUnsupportedSafeCreationVersion = Boolean(safeCreationData && !allCompatibleChains?.length)\n\n  const unavailableReason: AddNetworkUnavailableReason | null = (() => {\n    if (!isFeatureEnabled) return null\n    if (safeCreationError) return 'safe-specific'\n    if (safeCreationData && noAvailableNetworks) return 'safe-specific'\n    if (isUnsupportedSafeCreationVersion) return 'outdated-mastercopy'\n    return null\n  })()\n\n  return {\n    loading: safeCreationLoading,\n    availableNetworks: unavailableReason ? [] : availableNetworks,\n    unavailableReason,\n    error: safeCreationError,\n    isFeatureEnabled,\n  }\n}\n",
+    "apps/web/src/features/multichain/hooks/__tests__/useAddNetworkState.test.ts": "import { renderHook } from '@testing-library/react'\nimport type { Chain } from '@safe-global/store/gateway/AUTO_GENERATED/chains'\n\njest.mock('@/hooks/useChains', () => ({\n  __esModule: true,\n  default: jest.fn(),\n  useCurrentChain: jest.fn(),\n}))\njest.mock('@safe-global/utils/features/multichain/hooks/useCompatibleNetworks', () => ({\n  useCompatibleNetworks: jest.fn(),\n}))\njest.mock('../useSafeCreationData', () => ({\n  useSafeCreationData: jest.fn(),\n}))\njest.mock('../../utils', () => ({\n  hasMultiChainAddNetworkFeature: jest.fn(),\n}))\n\nimport useChains, { useCurrentChain } from '@/hooks/useChains'\nimport { useCompatibleNetworks } from '@safe-global/utils/features/multichain/hooks/useCompatibleNetworks'\nimport { useSafeCreationData } from '../useSafeCreationData'\nimport { hasMultiChainAddNetworkFeature } from '../../utils'\nimport { useAddNetworkState } from '../useAddNetworkState'\n\nconst asChain = (chainId: string, overrides: Partial<Chain> = {}): Chain =>\n  ({\n    chainId,\n    chainName: `Chain-${chainId}`,\n    shortName: `c${chainId}`,\n    chainLogoUri: null,\n    isTestnet: false,\n    l2: false,\n    ...overrides,\n  }) as unknown as Chain\n\nconst configs = [asChain('1'), asChain('10'), asChain('137')]\n\nconst setupDefaults = (\n  overrides: {\n    featureEnabledByChainId?: Record<string, boolean>\n    creationResult?: [unknown, Error | undefined, boolean]\n    compatible?: Array<Chain & { available: boolean }>\n    currentChainId?: string\n  } = {},\n) => {\n  const currentChainId = overrides.currentChainId ?? '1'\n  ;(useChains as unknown as jest.Mock).mockReturnValue({ configs })\n  ;(useCurrentChain as jest.Mock).mockReturnValue(asChain(currentChainId))\n  ;(useSafeCreationData as jest.Mock).mockReturnValue(\n    overrides.creationResult ?? [{ masterCopy: '0xMasterCopy' }, undefined, false],\n  )\n  ;(useCompatibleNetworks as jest.Mock).mockReturnValue(\n    overrides.compatible ?? configs.map((c) => ({ ...c, available: true })),\n  )\n  ;(hasMultiChainAddNetworkFeature as jest.Mock).mockImplementation((chain: Chain | undefined) => {\n    if (!chain) return false\n    const flags = overrides.featureEnabledByChainId\n    return flags ? (flags[chain.chainId] ?? true) : true\n  })\n}\n\ndescribe('useAddNetworkState', () => {\n  beforeEach(() => jest.resetAllMocks())\n\n  it('returns the filtered available networks when everything is ok', () => {\n    setupDefaults()\n\n    const { result } = renderHook(() => useAddNetworkState('0xSafe', ['1']))\n\n    expect(result.current.isFeatureEnabled).toBe(true)\n    expect(result.current.unavailableReason).toBeNull()\n    expect(result.current.availableNetworks.map((c) => c.chainId)).toEqual(['10', '137'])\n  })\n\n  it('marks unavailableReason \"safe-specific\" when creation data errored', () => {\n    setupDefaults({ creationResult: [undefined, new Error('boom'), false] })\n\n    const { result } = renderHook(() => useAddNetworkState('0xSafe', ['1']))\n\n    expect(result.current.unavailableReason).toBe('safe-specific')\n    expect(result.current.availableNetworks).toEqual([])\n    expect(result.current.error?.message).toBe('boom')\n  })\n\n  it('marks unavailableReason \"outdated-mastercopy\" when compatible networks list is empty but data exists', () => {\n    setupDefaults({ compatible: [] })\n\n    const { result } = renderHook(() => useAddNetworkState('0xSafe', ['1']))\n\n    expect(result.current.unavailableReason).toBe('outdated-mastercopy')\n    expect(result.current.availableNetworks).toEqual([])\n  })\n\n  it('marks unavailableReason \"safe-specific\" when every compatible target chain is unavailable', () => {\n    setupDefaults({\n      compatible: configs.map((c) => ({ ...c, available: false })),\n    })\n\n    const { result } = renderHook(() => useAddNetworkState('0xSafe', ['1']))\n\n    expect(result.current.unavailableReason).toBe('safe-specific')\n    expect(result.current.availableNetworks).toEqual([])\n  })\n\n  it('sets isFeatureEnabled=false when the current chain has no multi-chain feature', () => {\n    setupDefaults({ featureEnabledByChainId: { '1': false, '10': true, '137': true } })\n\n    const { result } = renderHook(() => useAddNetworkState('0xSafe', ['1']))\n\n    expect(result.current.isFeatureEnabled).toBe(false)\n    // When feature is disabled on current chain, unavailableReason stays null;\n    // the consumer is expected to simply not render the section.\n    expect(result.current.unavailableReason).toBeNull()\n  })\n\n  it('filters out target chains that do not support the add-network feature', () => {\n    setupDefaults({ featureEnabledByChainId: { '1': true, '10': false, '137': true } })\n\n    const { result } = renderHook(() => useAddNetworkState('0xSafe', ['1']))\n\n    expect(result.current.availableNetworks.map((c) => c.chainId)).toEqual(['137'])\n  })\n\n  it('excludes already-deployed chains from availableNetworks', () => {\n    setupDefaults()\n\n    const { result } = renderHook(() => useAddNetworkState('0xSafe', ['1', '10']))\n\n    expect(result.current.availableNetworks.map((c) => c.chainId)).toEqual(['137'])\n  })\n\n  it('forwards the loading flag from useSafeCreationData', () => {\n    setupDefaults({ creationResult: [undefined, undefined, true] })\n\n    const { result } = renderHook(() => useAddNetworkState('0xSafe', ['1']))\n\n    expect(result.current.loading).toBe(true)\n    expect(result.current.unavailableReason).toBeNull()\n  })\n\n  it('keeps unavailableReason null before data arrives so the dropdown can show a loader instead of a message', () => {\n    setupDefaults({ creationResult: [undefined, undefined, true], compatible: [] })\n\n    const { result } = renderHook(() => useAddNetworkState('0xSafe', ['1']))\n\n    expect(result.current.loading).toBe(true)\n    expect(result.current.unavailableReason).toBeNull()\n  })\n})\n",
+    "apps/web/src/features/multichain/hooks/index.ts": "export { useIsMultichainSafe } from './useIsMultichainSafe'\nexport { useSafeCreationData } from './useSafeCreationData'\nexport { useAddNetworkState } from './useAddNetworkState'\nexport type { AddNetworkState, AddNetworkUnavailableReason, AvailableNetwork } from './useAddNetworkState'\n",
+    "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.tsx": "import { Info, Loader2, Plus } from 'lucide-react'\nimport { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'\nimport { Badge } from '@/components/ui/badge'\nimport { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'\nimport { Typography } from '@/components/ui/typography'\nimport { useAddNetworkState, type AddNetworkUnavailableReason } from '@/features/multichain'\nimport { OVERVIEW_EVENTS, OVERVIEW_LABELS, trackEvent } from '@/services/analytics'\nimport ChainLogo from './ChainLogo'\n\nconst UNAVAILABLE_MESSAGES: Record<AddNetworkUnavailableReason, string> = {\n  'safe-specific': 'Adding another network is not possible for this Safe.',\n  'outdated-mastercopy':\n    'This account was created from an outdated mastercopy. Adding another network is not possible.',\n}\n\nexport interface AllNetworksSectionProps {\n  safeAddress: string\n  deployedChainIds: string[]\n  onAddNetwork: (chainId: string) => void\n}\n\nfunction AllNetworksSection({ safeAddress, deployedChainIds, onAddNetwork }: AllNetworksSectionProps) {\n  const { loading, availableNetworks, unavailableReason, error, isFeatureEnabled } = useAddNetworkState(\n    safeAddress,\n    deployedChainIds,\n  )\n\n  if (!isFeatureEnabled) return null\n\n  if (unavailableReason) {\n    const infoIcon = <Info className=\"size-4 shrink-0 text-muted-foreground mt-0.5\" />\n    return (\n      <div\n        data-testid=\"chain-selector-unavailable\"\n        className=\"flex items-start gap-2 rounded-lg bg-muted/30 px-3 py-2 mt-1\"\n      >\n        {error?.message ? (\n          <Tooltip>\n            <TooltipTrigger\n              render={\n                <span\n                  data-testid=\"chain-selector-unavailable-tooltip\"\n                  className=\"shrink-0 inline-flex mt-0.5 cursor-help\"\n                  tabIndex={0}\n                >\n                  {infoIcon}\n                </span>\n              }\n            />\n            <TooltipContent>{error.message}</TooltipContent>\n          </Tooltip>\n        ) : (\n          infoIcon\n        )}\n        <Typography variant=\"paragraph-small-medium\" className=\"text-muted-foreground\">\n          {UNAVAILABLE_MESSAGES[unavailableReason]}\n        </Typography>\n      </div>\n    )\n  }\n\n  if (loading) {\n    return (\n      <div className=\"flex items-center justify-center py-3\" data-testid=\"chain-selector-loading\">\n        <Loader2 className=\"size-4 animate-spin text-muted-foreground\" />\n      </div>\n    )\n  }\n\n  if (availableNetworks.length === 0) return null\n\n  const handleAccordionChange = (value: unknown) => {\n    const openedIds = Array.isArray(value) ? (value as string[]) : []\n    if (openedIds.includes('all-networks')) {\n      trackEvent(OVERVIEW_EVENTS.SHOW_ALL_NETWORKS)\n    }\n  }\n\n  const handleChainClick = (chainId: string) => {\n    trackEvent({ ...OVERVIEW_EVENTS.ADD_NEW_NETWORK, label: OVERVIEW_LABELS.top_bar })\n    onAddNetwork(chainId)\n  }\n\n  return (\n    <Accordion defaultValue={[]} onValueChange={handleAccordionChange}>\n      <AccordionItem value=\"all-networks\" className=\"border-0\">\n        <AccordionTrigger className=\"rounded-lg pl-4 pr-2 py-2 hover:no-underline hover:bg-muted/30 text-muted-foreground cursor-pointer\">\n          <Typography variant=\"paragraph-small-medium\" className=\"text-muted-foreground\">\n            All networks\n          </Typography>\n        </AccordionTrigger>\n        <AccordionContent className=\"pb-0\">\n          <div className=\"flex flex-col\">\n            {availableNetworks.map((chainItem) => {\n              const disabled = !chainItem.available\n              return (\n                <button\n                  key={chainItem.chainId}\n                  onClick={() => !disabled && handleChainClick(chainItem.chainId)}\n                  disabled={disabled}\n                  className=\"flex items-center justify-between px-2 py-2 rounded-lg w-full cursor-pointer hover:bg-muted/30 text-left disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent\"\n                  aria-label={`Add ${chainItem.chainName}`}\n                >\n                  <div className=\"flex items-center gap-4\">\n                    <ChainLogo chainId={chainItem.chainId} />\n                    <Typography variant=\"paragraph-small-medium\" className=\"text-muted-foreground\">\n                      {chainItem.chainName}\n                    </Typography>\n                  </div>\n                  {disabled ? (\n                    <Badge variant=\"secondary\" className=\"text-[10px] px-1.5\">\n                      Not available\n                    </Badge>\n                  ) : (\n                    <Plus className=\"size-4 shrink-0 text-muted-foreground\" />\n                  )}\n                </button>\n              )\n            })}\n          </div>\n        </AccordionContent>\n      </AccordionItem>\n    </Accordion>\n  )\n}\n\nexport default AllNetworksSection\n",
+    "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/AllNetworksSection.test.tsx": "import { render, screen, fireEvent } from '@testing-library/react'\n\njest.mock('@/features/multichain', () => ({\n  useAddNetworkState: jest.fn(),\n}))\njest.mock('@/services/analytics', () => ({\n  trackEvent: jest.fn(),\n  OVERVIEW_EVENTS: {\n    ADD_NEW_NETWORK: { action: 'Add new network', category: 'overview' },\n    SHOW_ALL_NETWORKS: { action: 'Show all networks', category: 'overview' },\n  },\n  OVERVIEW_LABELS: { top_bar: 'top_bar' },\n}))\njest.mock('./ChainLogo', () => ({\n  __esModule: true,\n  default: ({ chainId }: { chainId: string }) => <span data-testid=\"chain-logo\" data-chain-id={chainId} />,\n}))\n\nimport { useAddNetworkState } from '@/features/multichain'\nimport { trackEvent, OVERVIEW_EVENTS, OVERVIEW_LABELS } from '@/services/analytics'\nimport AllNetworksSection from './AllNetworksSection'\n\nconst mockHook = useAddNetworkState as jest.Mock\nconst mockTrack = trackEvent as jest.Mock\n\ndescribe('AllNetworksSection', () => {\n  beforeEach(() => jest.resetAllMocks())\n\n  it('renders nothing when the feature is disabled on the current chain', () => {\n    mockHook.mockReturnValue({\n      loading: false,\n      availableNetworks: [],\n      unavailableReason: null,\n      isFeatureEnabled: false,\n    })\n\n    const { container } = render(\n      <AllNetworksSection safeAddress=\"0xSafe\" deployedChainIds={['1']} onAddNetwork={jest.fn()} />,\n    )\n\n    expect(container).toBeEmptyDOMElement()\n  })\n\n  it('shows the \"not possible for this Safe\" message for the safe-specific reason', () => {\n    mockHook.mockReturnValue({\n      loading: false,\n      availableNetworks: [],\n      unavailableReason: 'safe-specific',\n      isFeatureEnabled: true,\n    })\n\n    render(<AllNetworksSection safeAddress=\"0xSafe\" deployedChainIds={['1']} onAddNetwork={jest.fn()} />)\n\n    expect(screen.getByTestId('chain-selector-unavailable')).toBeInTheDocument()\n    expect(screen.getByText('Adding another network is not possible for this Safe.')).toBeInTheDocument()\n  })\n\n  it('wraps the Info icon in a tooltip trigger when a raw error message is available', () => {\n    mockHook.mockReturnValue({\n      loading: false,\n      availableNetworks: [],\n      unavailableReason: 'safe-specific',\n      error: new Error('The method this Safe was created with is not supported.'),\n      isFeatureEnabled: true,\n    })\n\n    render(<AllNetworksSection safeAddress=\"0xSafe\" deployedChainIds={['1']} onAddNetwork={jest.fn()} />)\n\n    expect(screen.getByTestId('chain-selector-unavailable-tooltip')).toBeInTheDocument()\n  })\n\n  it('does not render a tooltip trigger when there is no raw error message', () => {\n    mockHook.mockReturnValue({\n      loading: false,\n      availableNetworks: [],\n      unavailableReason: 'outdated-mastercopy',\n      isFeatureEnabled: true,\n    })\n\n    render(<AllNetworksSection safeAddress=\"0xSafe\" deployedChainIds={['1']} onAddNetwork={jest.fn()} />)\n\n    expect(screen.queryByTestId('chain-selector-unavailable-tooltip')).not.toBeInTheDocument()\n  })\n\n  it('shows the outdated-mastercopy message when the reason is outdated-mastercopy', () => {\n    mockHook.mockReturnValue({\n      loading: false,\n      availableNetworks: [],\n      unavailableReason: 'outdated-mastercopy',\n      isFeatureEnabled: true,\n    })\n\n    render(<AllNetworksSection safeAddress=\"0xSafe\" deployedChainIds={['1']} onAddNetwork={jest.fn()} />)\n\n    expect(\n      screen.getByText('This account was created from an outdated mastercopy. Adding another network is not possible.'),\n    ).toBeInTheDocument()\n  })\n\n  it('shows a loader while the creation data is being fetched', () => {\n    mockHook.mockReturnValue({\n      loading: true,\n      availableNetworks: [],\n      unavailableReason: null,\n      isFeatureEnabled: true,\n    })\n\n    render(<AllNetworksSection safeAddress=\"0xSafe\" deployedChainIds={['1']} onAddNetwork={jest.fn()} />)\n\n    expect(screen.getByTestId('chain-selector-loading')).toBeInTheDocument()\n  })\n\n  it('renders nothing when there are no available networks and no error', () => {\n    mockHook.mockReturnValue({\n      loading: false,\n      availableNetworks: [],\n      unavailableReason: null,\n      isFeatureEnabled: true,\n    })\n\n    const { container } = render(\n      <AllNetworksSection safeAddress=\"0xSafe\" deployedChainIds={['1']} onAddNetwork={jest.fn()} />,\n    )\n\n    expect(container).toBeEmptyDOMElement()\n  })\n\n  it('renders the \"All networks\" accordion trigger when there are available networks', () => {\n    mockHook.mockReturnValue({\n      loading: false,\n      availableNetworks: [\n        { chainId: '10', chainName: 'Optimism', available: true },\n        { chainId: '137', chainName: 'Polygon', available: true },\n      ],\n      unavailableReason: null,\n      isFeatureEnabled: true,\n    })\n\n    render(<AllNetworksSection safeAddress=\"0xSafe\" deployedChainIds={['1']} onAddNetwork={jest.fn()} />)\n\n    expect(screen.getByText('All networks')).toBeInTheDocument()\n  })\n\n  it('exposes an add button per chain once the accordion is expanded', () => {\n    mockHook.mockReturnValue({\n      loading: false,\n      availableNetworks: [\n        { chainId: '10', chainName: 'Optimism', available: true },\n        { chainId: '137', chainName: 'Polygon', available: true },\n      ],\n      unavailableReason: null,\n      isFeatureEnabled: true,\n    })\n\n    render(<AllNetworksSection safeAddress=\"0xSafe\" deployedChainIds={['1']} onAddNetwork={jest.fn()} />)\n    fireEvent.click(screen.getByText('All networks'))\n\n    expect(screen.getByLabelText('Add Optimism')).toBeEnabled()\n    expect(screen.getByLabelText('Add Polygon')).toBeEnabled()\n  })\n\n  it('calls onAddNetwork with the clicked chainId for an available chain', () => {\n    const onAddNetwork = jest.fn()\n    mockHook.mockReturnValue({\n      loading: false,\n      availableNetworks: [{ chainId: '10', chainName: 'Optimism', available: true }],\n      unavailableReason: null,\n      isFeatureEnabled: true,\n    })\n\n    render(<AllNetworksSection safeAddress=\"0xSafe\" deployedChainIds={['1']} onAddNetwork={onAddNetwork} />)\n    fireEvent.click(screen.getByText('All networks'))\n    fireEvent.click(screen.getByLabelText('Add Optimism'))\n\n    expect(onAddNetwork).toHaveBeenCalledWith('10')\n  })\n\n  it('marks a chain as disabled and shows \"Not available\" when available=false', () => {\n    const onAddNetwork = jest.fn()\n    mockHook.mockReturnValue({\n      loading: false,\n      availableNetworks: [{ chainId: '324', chainName: 'zkSync', available: false }],\n      unavailableReason: null,\n      isFeatureEnabled: true,\n    })\n\n    render(<AllNetworksSection safeAddress=\"0xSafe\" deployedChainIds={['1']} onAddNetwork={onAddNetwork} />)\n    fireEvent.click(screen.getByText('All networks'))\n\n    const button = screen.getByLabelText('Add zkSync')\n    expect(button).toBeDisabled()\n    expect(screen.getByText('Not available')).toBeInTheDocument()\n\n    fireEvent.click(button)\n    expect(onAddNetwork).not.toHaveBeenCalled()\n  })\n\n  describe('analytics', () => {\n    beforeEach(() => {\n      mockHook.mockReturnValue({\n        loading: false,\n        availableNetworks: [{ chainId: '10', chainName: 'Optimism', available: true }],\n        unavailableReason: null,\n        isFeatureEnabled: true,\n      })\n    })\n\n    it('fires SHOW_ALL_NETWORKS when the accordion is expanded', () => {\n      render(<AllNetworksSection safeAddress=\"0xSafe\" deployedChainIds={['1']} onAddNetwork={jest.fn()} />)\n      fireEvent.click(screen.getByText('All networks'))\n\n      expect(mockTrack).toHaveBeenCalledWith(OVERVIEW_EVENTS.SHOW_ALL_NETWORKS)\n    })\n\n    it('does not fire SHOW_ALL_NETWORKS when the accordion is collapsed again', () => {\n      render(<AllNetworksSection safeAddress=\"0xSafe\" deployedChainIds={['1']} onAddNetwork={jest.fn()} />)\n      fireEvent.click(screen.getByText('All networks'))\n      mockTrack.mockClear()\n      fireEvent.click(screen.getByText('All networks'))\n\n      expect(mockTrack).not.toHaveBeenCalled()\n    })\n\n    it('fires ADD_NEW_NETWORK with top_bar label when a chain is clicked', () => {\n      render(<AllNetworksSection safeAddress=\"0xSafe\" deployedChainIds={['1']} onAddNetwork={jest.fn()} />)\n      fireEvent.click(screen.getByText('All networks'))\n      fireEvent.click(screen.getByLabelText('Add Optimism'))\n\n      expect(mockTrack).toHaveBeenCalledWith({ ...OVERVIEW_EVENTS.ADD_NEW_NETWORK, label: OVERVIEW_LABELS.top_bar })\n    })\n  })\n})\n",
+    "apps/web/src/features/spaces/components/SafeSelectorDropdown/components/ChainSelectorBlock.tsx": "import { useState } from 'react'\nimport { ChevronDown } from 'lucide-react'\nimport { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'\nimport { Typography } from '@/components/ui/typography'\nimport AllNetworksSection from './AllNetworksSection'\nimport ChainLogo from './ChainLogo'\nimport type { ChainInfo } from '@/features/spaces/types'\n\nexport interface ChainSelectorBlockProps {\n  deployedChains: ChainInfo[]\n  selectedChainId: string\n  safeAddress: string\n  deployedChainIds: string[]\n  onChainSelect: (chainId: string, event?: React.MouseEvent) => void\n  onAddNetwork: (chainId: string) => void\n}\n\nconst handleChainTriggerKeyDown = (e: React.KeyboardEvent) => {\n  if (e.key === 'Enter' || e.key === ' ') {\n    e.preventDefault()\n    ;(e.currentTarget as HTMLElement).click()\n  }\n}\n\nfunction ChainSelectorBlock({\n  deployedChains,\n  selectedChainId,\n  safeAddress,\n  deployedChainIds,\n  onChainSelect,\n  onAddNetwork,\n}: ChainSelectorBlockProps) {\n  const displayChainId = selectedChainId || deployedChains[0]?.chainId\n  const [open, setOpen] = useState(false)\n\n  const handleAddNetworkClick = (chainId: string) => {\n    setOpen(false)\n    onAddNetwork(chainId)\n  }\n\n  return (\n    <DropdownMenu open={open} onOpenChange={setOpen}>\n      <DropdownMenuTrigger\n        render={\n          <span\n            role=\"button\"\n            tabIndex={0}\n            data-testid=\"space-chain-navigation-button\"\n            className=\"w-16 flex items-center justify-between px-2 m-1 rounded-lg shrink-0 cursor-pointer hover:bg-muted/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2\"\n            onKeyDown={handleChainTriggerKeyDown}\n          >\n            <ChainLogo chainId={displayChainId} />\n            <ChevronDown className=\"size-4 text-muted-foreground shrink-0\" />\n          </span>\n        }\n      />\n      <DropdownMenuContent align=\"end\" sideOffset={8} className=\"w-[196px] bg-card text-foreground ring-0 p-1\">\n        <div className=\"flex flex-col\">\n          {deployedChains.map((chainItem) => (\n            <button\n              key={chainItem.chainId}\n              onClick={(e) => {\n                setOpen(false)\n                onChainSelect(chainItem.chainId, e)\n              }}\n              className=\"flex items-center gap-4 px-2 py-2 rounded-lg cursor-pointer hover:bg-muted/30 w-full text-left\"\n            >\n              <ChainLogo chainId={chainItem.chainId} />\n              <Typography variant=\"paragraph-small-medium\">{chainItem.chainName}</Typography>\n            </button>\n          ))}\n        </div>\n\n        <AllNetworksSection\n          safeAddress={safeAddress}\n          deployedChainIds={deployedChainIds}\n          onAddNetwork={handleAddNetworkClick}\n        />\n      </DropdownMenuContent>\n    </DropdownMenu>\n  )\n}\n\nexport default ChainSelectorBlock\n",
+    "apps/web/src/components/common/SpaceSafeBar/SpaceChainSelector.tsx": "import { useState, useCallback } from 'react'\nimport ChainSelectorBlock from '@/features/spaces/components/SafeSelectorDropdown/components/ChainSelectorBlock'\nimport { CreateSafeOnNewChain } from '@/features/multichain'\nimport { useSpaceChainSelector } from './hooks/useSpaceChainSelector'\n\nfunction SpaceChainSelector() {\n  const { deployedChains, selectedChainId, deployedChainIds, safeAddress, safeName, handleChainChange } =\n    useSpaceChainSelector()\n\n  const [addNetworkChainId, setAddNetworkChainId] = useState<string>()\n\n  const handleAddNetwork = useCallback((chainId: string) => {\n    setAddNetworkChainId(chainId)\n  }, [])\n\n  const handleCloseDialog = useCallback(() => {\n    setAddNetworkChainId(undefined)\n  }, [])\n\n  if (!deployedChains.length) return null\n\n  return (\n    <div\n      className=\"self-stretch sm:order-last flex items-stretch shadow-[0px_4px_20px_0px_rgba(0,0,0,0.03)] rounded-lg bg-card\"\n      data-testid=\"space-chain-selector\"\n    >\n      <ChainSelectorBlock\n        deployedChains={deployedChains}\n        selectedChainId={selectedChainId}\n        safeAddress={safeAddress}\n        deployedChainIds={deployedChainIds}\n        onChainSelect={handleChainChange}\n        onAddNetwork={handleAddNetwork}\n      />\n\n      {addNetworkChainId && (\n        <CreateSafeOnNewChain\n          open\n          onClose={handleCloseDialog}\n          currentName={safeName}\n          safeAddress={safeAddress}\n          deployedChainIds={deployedChainIds}\n          defaultChainId={addNetworkChainId}\n        />\n      )}\n    </div>\n  )\n}\n\nexport default SpaceChainSelector\n",
+    "apps/web/src/components/common/SpaceSafeBar/SpaceChainSelector.stories.tsx": "import type { Meta, StoryObj } from '@storybook/react'\nimport { createMockStory } from '@/stories/mocks'\nimport ChainSelectorBlock from '@/features/spaces/components/SafeSelectorDropdown/components/ChainSelectorBlock'\n\nconst deployedChains = {\n  single: [{ chainId: '1', chainName: 'Ethereum', chainLogoUri: undefined, shortName: 'eth' }],\n  multi: [\n    { chainId: '1', chainName: 'Ethereum', chainLogoUri: undefined, shortName: 'eth' },\n    { chainId: '137', chainName: 'Polygon', chainLogoUri: undefined, shortName: 'matic' },\n    { chainId: '8453', chainName: 'Base', chainLogoUri: undefined, shortName: 'base' },\n  ],\n}\n\nconst defaultSetup = createMockStory({\n  scenario: 'efSafe',\n  wallet: 'disconnected',\n  layout: 'paper',\n  shadcn: true,\n})\n\n/**\n * Visual stories for the SpaceChainSelector container + ChainSelectorBlock.\n * SpaceChainSelector itself is a thin hook wrapper — these stories document\n * the visual states directly via ChainSelectorBlock. The \"All networks\" accordion\n * and its unavailable state are driven by `useAddNetworkState`, which runs\n * against the mocked scenario inside the Portal-rendered DropdownMenuContent.\n */\nconst meta = {\n  title: 'Features/Spaces/SpaceChainSelector',\n  parameters: {\n    layout: 'centered',\n    ...defaultSetup.parameters,\n  },\n  decorators: [defaultSetup.decorator],\n  tags: ['autodocs'],\n} satisfies Meta\n\nexport default meta\ntype Story = StoryObj<typeof meta>\n\nconst Wrapper = ({ children }: { children: React.ReactNode }) => (\n  <div className=\"inline-flex items-center shadow-[0px_4px_20px_0px_rgba(0,0,0,0.07)] rounded-lg bg-card min-w-[64px] min-h-[68px]\">\n    {children}\n  </div>\n)\n\nexport const SingleChain: Story = {\n  render: () => (\n    <Wrapper>\n      <ChainSelectorBlock\n        deployedChains={deployedChains.single}\n        selectedChainId=\"1\"\n        safeAddress=\"0x0000000000000000000000000000000000000001\"\n        deployedChainIds={['1']}\n        onChainSelect={() => {}}\n        onAddNetwork={() => {}}\n      />\n    </Wrapper>\n  ),\n}\n\nexport const MultiChain: Story = {\n  render: () => (\n    <Wrapper>\n      <ChainSelectorBlock\n        deployedChains={deployedChains.multi}\n        selectedChainId=\"1\"\n        safeAddress=\"0x0000000000000000000000000000000000000002\"\n        deployedChainIds={['1', '137', '8453']}\n        onChainSelect={() => {}}\n        onAddNetwork={() => {}}\n      />\n    </Wrapper>\n  ),\n}\n"
+  },
+  "has_audio": true,
+  "has_video": true,
+  "has_thumbnail": true,
+  "audio_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-wallet-monorepo/pr-7734/c51ca4d62224/audio.mp3",
+  "audio_manifest": {
+    "file": "audio.mp3",
+    "total_ms": 368213,
+    "silence_ms": 400,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "adapter": "elevenlabs",
+    "model": "eleven_turbo_v2_5",
+    "intro": {
+      "narration": "Grab some popcorn and let's dive in. Here's the pitch: This PR fixes the Space safe bar's chain selector ('All networks' accordion) which previously listed every non-deployed chain regardless of whether the Safe could actually be added to it, leading to silent failures for incompatible Safes (outdated mastercopy, zkSync/Lens, etc.).",
+      "narration_ms": 20759,
+      "gap_ms": 500,
+      "duration_ms": 21259
+    },
+    "steps": [
+      {
+        "step": 1,
+        "start_ms": 21259,
+        "end_ms": 38488
+      },
+      {
+        "step": 2,
+        "start_ms": 38888,
+        "end_ms": 55096
+      },
+      {
+        "step": 3,
+        "start_ms": 55496,
+        "end_ms": 75047
+      },
+      {
+        "step": 4,
+        "start_ms": 75447,
+        "end_ms": 90494
+      },
+      {
+        "step": 5,
+        "start_ms": 90894,
+        "end_ms": 112303
+      },
+      {
+        "step": 6,
+        "start_ms": 112703,
+        "end_ms": 133369
+      },
+      {
+        "step": 7,
+        "start_ms": 133769,
+        "end_ms": 148676
+      },
+      {
+        "step": 8,
+        "start_ms": 149076,
+        "end_ms": 164123
+      },
+      {
+        "step": 9,
+        "start_ms": 164523,
+        "end_ms": 182495
+      },
+      {
+        "step": 10,
+        "start_ms": 182895,
+        "end_ms": 198359
+      },
+      {
+        "step": 11,
+        "start_ms": 198759,
+        "end_ms": 215895
+      },
+      {
+        "step": 12,
+        "start_ms": 216295,
+        "end_ms": 233756
+      },
+      {
+        "step": 13,
+        "start_ms": 234156,
+        "end_ms": 247809
+      },
+      {
+        "step": 14,
+        "start_ms": 248209,
+        "end_ms": 262652
+      },
+      {
+        "step": 15,
+        "start_ms": 263052,
+        "end_ms": 280746
+      },
+      {
+        "step": 16,
+        "start_ms": 281146,
+        "end_ms": 304505
+      },
+      {
+        "step": 17,
+        "start_ms": 304905,
+        "end_ms": 324688
+      },
+      {
+        "step": 18,
+        "start_ms": 325088,
+        "end_ms": 345940
+      },
+      {
+        "step": 19,
+        "start_ms": 346340,
+        "end_ms": 368213
+      }
+    ],
+    "chapters": [
+      {
+        "title": "Why this change",
+        "start_ms": 21259,
+        "end_ms": 55096,
+        "step_range": [
+          1,
+          2
+        ]
+      },
+      {
+        "title": "The new state hook",
+        "start_ms": 55496,
+        "end_ms": 148676,
+        "step_range": [
+          3,
+          7
+        ]
+      },
+      {
+        "title": "The new visual section",
+        "start_ms": 149076,
+        "end_ms": 215895,
+        "step_range": [
+          8,
+          11
+        ]
+      },
+      {
+        "title": "Consumers that had to adapt",
+        "start_ms": 216295,
+        "end_ms": 280746,
+        "step_range": [
+          12,
+          15
+        ]
+      },
+      {
+        "title": "What can go wrong",
+        "start_ms": 281146,
+        "end_ms": 345940,
+        "step_range": [
+          16,
+          18
+        ]
+      },
+      {
+        "title": "The bottom line",
+        "start_ms": 346340,
+        "end_ms": 368213,
+        "step_range": [
+          19,
+          19
+        ]
+      }
+    ],
+    "generated_at": 1777031977763
+  },
+  "audio_manifest_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-wallet-monorepo/pr-7734/c51ca4d62224/audio.json",
+  "video_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-wallet-monorepo/pr-7734/c51ca4d62224/video-github.mp4",
+  "thumbnail_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-wallet-monorepo/pr-7734/c51ca4d62224/thumbnail.png",
+  "pr_url": "https://github.com/safe-global/safe-wallet-monorepo/pull/7734",
+  "is_sample": false,
+  "sample_id": null
+}
