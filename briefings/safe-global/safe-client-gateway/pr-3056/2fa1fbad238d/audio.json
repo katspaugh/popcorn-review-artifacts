@@ -1,0 +1,168 @@
+{
+  "file": "audio.mp3",
+  "total_ms": 407269,
+  "silence_ms": 400,
+  "voice": "nPczCjzI2devNBz1zQrb",
+  "adapter": "elevenlabs",
+  "model": "eleven_turbo_v2_5",
+  "intro": {
+    "narration": "Grab some popcorn and let's dive in. Here's the pitch: This PR migrates `space_address_book_items.created_by` and `last_updated_by` columns from `varchar(42)` wallet addresses to `integer` user IDs, unblocking OIDC-authenticated users from writing address book entries.",
+    "narration_ms": 17229,
+    "gap_ms": 500,
+    "duration_ms": 17729
+  },
+  "steps": [
+    {
+      "step": 1,
+      "start_ms": 17729,
+      "end_ms": 43410
+    },
+    {
+      "step": 2,
+      "start_ms": 43810,
+      "end_ms": 60528
+    },
+    {
+      "step": 3,
+      "start_ms": 60928,
+      "end_ms": 78389
+    },
+    {
+      "step": 4,
+      "start_ms": 78789,
+      "end_ms": 99873
+    },
+    {
+      "step": 5,
+      "start_ms": 100273,
+      "end_ms": 120242
+    },
+    {
+      "step": 6,
+      "start_ms": 120642,
+      "end_ms": 139357
+    },
+    {
+      "step": 7,
+      "start_ms": 139757,
+      "end_ms": 159076
+    },
+    {
+      "step": 8,
+      "start_ms": 159476,
+      "end_ms": 178656
+    },
+    {
+      "step": 9,
+      "start_ms": 179056,
+      "end_ms": 198003
+    },
+    {
+      "step": 10,
+      "start_ms": 198403,
+      "end_ms": 224549
+    },
+    {
+      "step": 11,
+      "start_ms": 224949,
+      "end_ms": 244082
+    },
+    {
+      "step": 12,
+      "start_ms": 244482,
+      "end_ms": 265798
+    },
+    {
+      "step": 13,
+      "start_ms": 266198,
+      "end_ms": 286539
+    },
+    {
+      "step": 14,
+      "start_ms": 286939,
+      "end_ms": 305701
+    },
+    {
+      "step": 15,
+      "start_ms": 306101,
+      "end_ms": 325792
+    },
+    {
+      "step": 16,
+      "start_ms": 326192,
+      "end_ms": 345000
+    },
+    {
+      "step": 17,
+      "start_ms": 345400,
+      "end_ms": 363465
+    },
+    {
+      "step": 18,
+      "start_ms": 363865,
+      "end_ms": 383556
+    },
+    {
+      "step": 19,
+      "start_ms": 383956,
+      "end_ms": 407269
+    }
+  ],
+  "chapters": [
+    {
+      "title": "Why this change",
+      "start_ms": 17729,
+      "end_ms": 60528,
+      "step_range": [
+        1,
+        2
+      ]
+    },
+    {
+      "title": "The database migration",
+      "start_ms": 60928,
+      "end_ms": 159076,
+      "step_range": [
+        3,
+        7
+      ]
+    },
+    {
+      "title": "Entity and schema updates",
+      "start_ms": 159476,
+      "end_ms": 224549,
+      "step_range": [
+        8,
+        10
+      ]
+    },
+    {
+      "title": "Service and repository rewiring",
+      "start_ms": 224949,
+      "end_ms": 305701,
+      "step_range": [
+        11,
+        14
+      ]
+    },
+    {
+      "title": "What can go wrong",
+      "start_ms": 306101,
+      "end_ms": 383556,
+      "step_range": [
+        15,
+        18
+      ]
+    },
+    {
+      "title": "Closing the loop",
+      "start_ms": 383956,
+      "end_ms": 407269,
+      "step_range": [
+        19,
+        19
+      ]
+    }
+  ],
+  "generated_at": 1777046339340
+}

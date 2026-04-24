@@ -1,0 +1,1020 @@
+{
+  "slug": "safe-global/safe-client-gateway",
+  "pr_number": 3056,
+  "head_sha": "2fa1fbad238d8b5b59929f8e7d9fa2eb566c4d47",
+  "head_sha_short": "2fa1fbad238d",
+  "pr_title": "migrating addressBook createdBy updatedBy to be userId",
+  "created_at": 1777046233264,
+  "briefing": {
+    "id": 16,
+    "pr": {
+      "repo_slug": "safe-global/safe-client-gateway",
+      "number": 3056
+    },
+    "head_sha": "2fa1fbad238d8b5b59929f8e7d9fa2eb566c4d47",
+    "base_sha": "d5a03b5103aee0d4f82f5ac27ac2cbd7a43fe4a4",
+    "status": "done",
+    "model": "claude-sonnet-4-6",
+    "cost_cents": 20,
+    "latency_ms": 99356,
+    "summary_md": "This PR migrates `space_address_book_items.created_by` and `last_updated_by` columns from `varchar(42)` wallet addresses to `integer` user IDs, unblocking OIDC-authenticated users from writing address book entries. A new TypeORM migration (`AddressBookAttributionToUserId1777033895000`) handles the schema change with a pre-flight guard, backfill via a `wallets` table JOIN, column drop, and rename. The `isSiwe()` guards previously blocking OIDC users in `AddressBooksService` and `AddressBookItemsRepository` are removed, with attribution now sourced from `getAuthenticatedUserIdOrFail(authPayload)`. This is a breaking API change: `createdBy`/`lastUpdatedBy` in GET responses change from wallet address strings like `'0xAbc...'` to numeric user ID strings like `'42'`, requiring coordinated client updates.",
+    "file_summaries": [
+      {
+        "path": "migrations/1777033895000-address-book-attribution-to-user-id.ts",
+        "what_changed": "Adds migration `AddressBookAttributionToUserId1777033895000` that converts `space_address_book_items.created_by` and `last_updated_by` from `varchar(42)` wallet addresses to `integer` user IDs, with a pre-flight guard, backfill via `wallets` table JOIN, drop of old columns, rename, and NOT NULL enforcement. The `down` migration reverses the process in a lossy, best-effort manner.",
+        "why_it_matters": "Enables OIDC-authenticated users (who have no wallet address) to be attributed as authors of address book entries by switching the attribution key to `users.id`.",
+        "risk_hints": [
+          "Pre-flight check uses OR instead of AND: a row where only one of created_by/last_updated_by is unresolvable may not be caught correctly — the subquery logic `NOT EXISTS(...) OR NOT EXISTS(...)` is evaluated per-row but the outer EXISTS wraps the whole set, so a row failing only one column will still trigger, but verify the SQL logic is correct under all edge cases",
+          "No foreign key constraint added on the new integer columns referencing `users.id` — orphaned user IDs could accumulate silently",
+          "Backfill and NOT NULL are separate statements with no transaction wrapping; a failure between backfill and NOT NULL could leave nullable columns without the constraint",
+          "Down migration picks an arbitrary wallet (LIMIT 1) for multi-wallet users and leaves NULLs for OIDC entries — downstream code expecting NOT NULL varchar after rollback will break",
+          "Migration timestamp 1777033895000 is far in the future (year 2026+); verify this doesn't conflict with ordering assumptions in the migration runner",
+          "No index added on the new integer `created_by`/`last_updated_by` columns if queries filter by them",
+          "If the table is large, the multi-step ALTER/UPDATE sequence without explicit transaction could leave the table in an inconsistent state on partial failure"
+        ]
+      },
+      {
+        "path": "src/modules/spaces/datasources/entities/address-book-item.entity.db.ts",
+        "what_changed": "In `AddressBookItem` entity, `createdBy` and `lastUpdatedBy` columns changed from `varchar(42)` with `databaseAddressTransformer` (typed as `Address`) to `integer` (typed as `number`), removing the address transformer.",
+        "why_it_matters": "Stores user IDs instead of wallet addresses for attribution, enabling OIDC users (who have no wallet address) to create/update address book entries.",
+        "risk_hints": [
+          "DomainAddressBookItem interface must also be updated to reflect number type or a type mismatch will exist at compile time",
+          "Any existing serialization/deserialization code that expects createdBy/lastUpdatedBy to be an address string will break silently if not updated",
+          "The database migration must guarantee no NULL or unresolvable rows remain before the column type change, otherwise the NOT NULL constraint will fail",
+          "Downstream API consumers receive numeric user ID strings instead of wallet addresses — breaking change with no versioning guard visible here",
+          "Removal of databaseAddressTransformer means no normalization (e.g., checksum casing) is applied; verify no code paths still pass an address to these fields"
+        ]
+      },
+      {
+        "path": "src/modules/spaces/domain/address-books/address-book-items.repository.integration.spec.ts",
+        "what_changed": "Integration tests updated to replace `authPayload.signer_address` (wallet address string) with `Number(authPayload.sub)` (user ID integer) for `createdBy`/`lastUpdatedBy` fields, and two new OIDC-specific test helpers (`createOidcUser`, `createSpaceAsOidcAdmin`) plus two new OIDC test cases (upsert and delete) were added.",
+        "why_it_matters": "Validates that address book write operations work correctly for OIDC users who have no wallet address, using numeric user IDs for attribution instead.",
+        "risk_hints": [
+          "createSpaceAsOidcAdmin uses `space.generatedMaps[0]` for both the member insert and the returned spaceId — verify this map reliably contains `id` for the TypeORM insert result",
+          "`Number(authPayload.sub)` silently returns NaN if `sub` is not a numeric string; no assertion guards against this in the helpers",
+          "createOidcUser uses `user.generatedMaps[0].id` but also returns `user.raw[0]` — confirm `raw[0]` is a valid User entity with an `id` property for the member insert",
+          "invitedBy in createSpaceAsOidcAdmin is set to a random Ethereum address, which may be inconsistent with the OIDC-only intent and could mask bugs if invitedBy is later validated",
+          "The renamed test 'should throw ForbiddenException' → 'should throw NotFoundException' should be verified against actual repository behavior to ensure the exception type is correct"
+        ]
+      },
+      {
+        "path": "src/modules/spaces/domain/address-books/address-book-items.repository.ts",
+        "what_changed": "Removed `isSiwe()` guards and `ForbiddenException` from `updateExistingAddressBookItems` and `createNewAddressBookItems`; replaced `authPayload.signer_address` (wallet address string) with `userId` (number from `getAuthenticatedUserIdOrFail`) for `createdBy`/`lastUpdatedBy` fields. `getAuthenticatedUserIdOrFail` is now called once in `upsertAddressBookItems` and the resolved `userId` is threaded down.",
+        "why_it_matters": "Allows OIDC-authenticated users (who have no wallet address) to write address book entries by attributing writes to the numeric user ID instead of a wallet address.",
+        "risk_hints": [
+          "Verify `createdBy`/`lastUpdatedBy` DB columns are now integer type (migration applied) before this code runs, otherwise type mismatch at insert/update",
+          "Check that `getAuthenticatedUserIdOrFail` throws appropriately for unauthenticated callers — the old guards were redundant but explicit; confirm no regression in auth enforcement",
+          "API consumers reading `createdBy`/`lastUpdatedBy` as wallet address strings will break — confirm client-side changes are coordinated",
+          "Down migration is lossy for OIDC entries; verify rollback strategy is acceptable",
+          "deleteAddressBookItems path (not shown in diff) should also be checked for any remaining `isSiwe()` guards or `signer_address` usage"
+        ]
+      },
+      {
+        "path": "src/modules/spaces/domain/address-books/entities/__tests__/address-book-item.db.builder.ts",
+        "what_changed": "In `addressBookItemBuilder`, `createdBy` and `lastUpdatedBy` fields changed from `getAddress(faker.finance.ethereumAddress())` (wallet address strings) to `faker.number.int({ min: 1, max: DB_MAX_SAFE_INTEGER })` (integer user IDs). A license header was also added.",
+        "why_it_matters": "Aligns the test builder with the schema migration that changes attribution columns from varchar wallet addresses to integer user IDs, ensuring tests reflect the new data shape.",
+        "risk_hints": [
+          "DB_MAX_SAFE_INTEGER import should be verified to match the actual PostgreSQL integer max (2147483647) to avoid generating out-of-range values",
+          "Any existing tests relying on the old builder that assert createdBy/lastUpdatedBy as address strings will silently pass wrong types if not updated",
+          "min: 1 assumes user IDs are never 0 — verify this constraint holds in the actual schema/domain"
+        ]
+      },
+      {
+        "path": "src/modules/spaces/domain/address-books/entities/address-book-item.db.entity.ts",
+        "what_changed": "In `AddressBookDbItemSchema`, `createdBy` and `lastUpdatedBy` fields changed from `AddressSchema as z.ZodType<Address>` (wallet address strings) to `z.number().int()` (integer user IDs), with corresponding TypeScript type changes from `Address` to `number`.",
+        "why_it_matters": "Aligns the DB entity schema with the migration that replaces varchar wallet address columns with integer user ID columns, enabling OIDC users (who have no wallet address) to be attributed as authors.",
+        "risk_hints": [
+          "Any existing code reading createdBy/lastUpdatedBy as Address strings will now receive numbers — check all consumers of AddressBookDbItem for type compatibility",
+          "The SPDX license header addition is unrelated to the functional change — verify it's intentional and consistent with other files",
+          "Ensure the z.number().int() validation correctly rejects non-integer or null values that might exist during/after migration backfill"
+        ]
+      },
+      {
+        "path": "src/modules/spaces/routes/address-books.service.spec.ts",
+        "what_changed": "Unit tests for `AddressBooksService` replace `ForbiddenException` OIDC-blocked tests with `it.each` parameterized tests covering both SIWE and OIDC users for `upsertMany` and `deleteByAddress`, and replace unauthenticated-user `ForbiddenException` assertions with `UnauthorizedException` propagation tests. A new test verifies `createdBy`/`lastUpdatedBy` are serialized as strings.",
+        "why_it_matters": "Reflects the removal of `isSiwe()` guards that previously blocked OIDC users from write operations, confirming both auth types now succeed and attribution fields are numeric-user-ID-based strings.",
+        "risk_hints": [
+          "The unauthenticated-user tests now mock the repository to throw `UnauthorizedException` rather than asserting the repository is never called — verify the service actually calls `getAuthenticatedUserIdOrFail` before the repository, otherwise the guard logic is untested",
+          "The `createdBy` serialization test uses `siweAuthPayloadDtoBuilder` but the feature is meant to use user IDs for both auth types; an OIDC variant of this assertion is missing",
+          "No assertion that `repositoryMock.upsertMany` / `repositoryMock.deleteByAddress` is NOT called when unauthenticated — if the guard was moved into the repository layer, a unit test at the service layer may give false confidence"
+        ]
+      },
+      {
+        "path": "src/modules/spaces/routes/address-books.service.ts",
+        "what_changed": "Removed two `isSiwe()` guard checks (and the `ForbiddenException` import) from `upsertAddressBookItems` and `deleteByAddress` in `AddressBooksService`, and changed `createdBy`/`lastUpdatedBy` mapping to call `.toString()` on what are now numeric user IDs instead of wallet address strings.",
+        "why_it_matters": "Allows OIDC-authenticated users (who have no wallet address) to perform address book writes, since attribution is now based on numeric user IDs rather than signer addresses.",
+        "risk_hints": [
+          "If `item.createdBy` or `item.lastUpdatedBy` can be null/undefined, calling `.toString()` will throw at runtime — null safety should be verified",
+          "Removing the SIWE guard is a security boundary change; confirm that downstream repository methods (`upsertMany`, `deleteByAddress`) still enforce membership/authorization checks for both SIWE and OIDC users",
+          "API breaking change: consumers of `createdBy`/`lastUpdatedBy` fields will now receive a numeric string instead of a wallet address — verify all clients are updated",
+          "No fallback if `getAuthenticatedUserIdOrFail` fails inside the repository — confirm error propagation is handled correctly"
+        ]
+      },
+      {
+        "path": "src/modules/spaces/routes/entities/space-address-book.dto.entity.ts",
+        "what_changed": "In `SpaceAddressBookItemDto`, `createdBy` and `lastUpdatedBy` fields are decoupled from `AddressBookDbItem`'s type (previously typed as `AddressBookDbItem['createdBy']`/`['lastUpdatedBy']`) and explicitly typed as `string`, with Swagger descriptions updated to 'User ID of the creator/last updater'. The `AddressBookDbItem` import is also changed to a type-only import.",
+        "why_it_matters": "Reflects the migration of `createdBy`/`lastUpdatedBy` from wallet address strings to numeric user ID strings, making the DTO independent of the DB entity's column type so the API contract is explicit.",
+        "risk_hints": [
+          "The field type is `string` but user IDs are numeric integers — callers may expect a number; verify serialization converts int to string consistently",
+          "Decoupling from `AddressBookDbItem['createdBy']` means future DB type changes won't propagate to the DTO automatically — could cause silent drift",
+          "No validation decorator (e.g. `@IsString`, `@IsNumberString`) added to enforce the new format at runtime"
+        ]
+      }
+    ],
+    "architecture_delta": {
+      "architecture_notes": "The change touches four layers: the database migration, the TypeORM entity (`AddressBookItem`), the Zod DB schema (`AddressBookDbItemSchema`), and the service/repository layer (`AddressBooksService`, `AddressBookItemsRepository`). The DTO (`SpaceAddressBookItemDto`) is explicitly typed as `string` and decoupled from the DB entity type, meaning future DB type changes won't automatically propagate to the API contract. Attribution resolution is centralized: `getAuthenticatedUserIdOrFail` is called once in `upsertAddressBookItems` and the resolved `userId` is threaded into both `createNewAddressBookItems` and `updateExistingAddressBookItems`. No foreign key constraint is added on the new integer columns referencing `users.id`, so orphaned user IDs can accumulate silently.",
+      "reviewer_checklist": [
+        "Verify the migration's pre-flight SQL logic correctly catches rows where either `created_by` OR `last_updated_by` cannot be resolved to a user ID, and confirm the backfill + NOT NULL steps are wrapped in a transaction to prevent partial failure leaving nullable columns.",
+        "Confirm no remaining `isSiwe()` guards or `signer_address` usages exist in the `deleteAddressBookItems` path or any other address-book write path not covered by this diff.",
+        "Check that `item.createdBy` and `item.lastUpdatedBy` are guaranteed non-null before `.toString()` is called in `AddressBooksService`, and that `z.number().int()` in `AddressBookDbItemSchema` correctly rejects null/undefined values post-migration.",
+        "Validate that the `Number(authPayload.sub)` conversion in integration test helpers cannot silently produce `NaN` (e.g., if `sub` is a non-numeric OIDC subject), and that `createSpaceAsOidcAdmin` reliably extracts `id` from `generatedMaps[0]`.",
+        "Confirm that downstream API clients consuming `createdBy`/`lastUpdatedBy` as wallet address strings have been updated or are being updated in a coordinated release, given this is an undocumented breaking change with no API versioning guard.",
+        "Check whether a foreign key constraint on the new integer `created_by`/`last_updated_by` columns referencing `users.id` should be added to prevent orphaned attribution records."
+      ]
+    },
+    "tour": {
+      "chapters": [
+        {
+          "title": "Why this change",
+          "step_range": [
+            1,
+            2
+          ]
+        },
+        {
+          "title": "The database migration",
+          "step_range": [
+            3,
+            7
+          ]
+        },
+        {
+          "title": "Entity and schema updates",
+          "step_range": [
+            8,
+            10
+          ]
+        },
+        {
+          "title": "Service and repository rewiring",
+          "step_range": [
+            11,
+            14
+          ]
+        },
+        {
+          "title": "What can go wrong",
+          "step_range": [
+            15,
+            18
+          ]
+        },
+        {
+          "title": "Closing the loop",
+          "step_range": [
+            19,
+            19
+          ]
+        }
+      ],
+      "total_seconds": 255,
+      "steps": [
+        {
+          "step": 1,
+          "phase": "motivation",
+          "location": {
+            "file": "src/modules/spaces/routes/address-books.service.ts",
+            "line_range": [
+              1,
+              20
+            ],
+            "symbol": "AddressBooksService"
+          },
+          "action": "open",
+          "narration": "Here is the problem this PR is solving. OIDC-authenticated users, those who log in with email rather than a wallet, were blocked from writing to the address book because the attribution columns stored wallet addresses, and email-only users simply have no wallet address to store. The fix is to swap those columns from wallet address strings to numeric user IDs, which every authenticated user has regardless of login method.",
+          "estimated_seconds": 20
+        },
+        {
+          "step": 2,
+          "phase": "motivation",
+          "location": {
+            "file": "src/modules/spaces/routes/address-books.service.ts",
+            "line_range": [
+              1,
+              20
+            ],
+            "symbol": "AddressBooksService"
+          },
+          "action": "scroll-to",
+          "narration": "This diagram shows the before-and-after flow for a write operation. Previously, OIDC users hit a forbidden wall at the service layer. After this PR, both SIWE and OIDC users reach the repository, and attribution is resolved through a shared helper that returns a numeric user ID.",
+          "estimated_seconds": 15,
+          "diagram": {
+            "kind": "flowchart",
+            "title": "Auth flow before and after",
+            "mermaid": "flowchart TD\n  A[Client write request] --> B{Auth type?}\n  B -- SIWE --> C[isSiwe guard passes]\n  B -- OIDC --> D[isSiwe guard BLOCKS - old]\n  B -- OIDC --> E[getAuthenticatedUserIdOrFail - new]\n  C --> F[attribute via signer_address - old]\n  C --> G[attribute via userId integer - new]\n  E --> G\n  G --> H[upsert to DB]"
+          }
+        },
+        {
+          "step": 3,
+          "phase": "change",
+          "location": {
+            "file": "migrations/1777033895000-address-book-attribution-to-user-id.ts",
+            "line_range": [
+              1,
+              20
+            ],
+            "symbol": "AddressBookAttributionToUserId1777033895000"
+          },
+          "action": "open",
+          "narration": "The migration class is the foundation of everything else in this PR. It carries a timestamp well into the future, so double-check that your migration runner orders by timestamp and that this does not collide with anything already in flight. The class name makes the intent clear: attribution columns are moving to user ID.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 4,
+          "phase": "change",
+          "location": {
+            "file": "migrations/1777033895000-address-book-attribution-to-user-id.ts",
+            "line_range": [
+              21,
+              45
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "The up migration starts with a pre-flight guard. It checks whether any row in space_address_book_items has a created_by or last_updated_by wallet address that cannot be resolved to a user ID via the wallets table. If even one row fails resolution, the migration throws loudly rather than silently producing nulls. This is a good defensive pattern.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 5,
+          "phase": "change",
+          "location": {
+            "file": "migrations/1777033895000-address-book-attribution-to-user-id.ts",
+            "line_range": [
+              46,
+              75
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "After the guard, the migration adds two new integer columns, backfills them by joining against the wallets table, drops the old varchar columns, renames the new ones, and finally enforces NOT NULL. These are separate statements with no explicit transaction wrapping, so a failure mid-sequence could leave the table in a partially migrated state.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 6,
+          "phase": "change",
+          "location": {
+            "file": "migrations/1777033895000-address-book-attribution-to-user-id.ts",
+            "line_range": [
+              76,
+              110
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "The down migration reverses the process, but it is explicitly lossy. For users who authenticated via OIDC and have no wallet, the rollback leaves those attribution columns as NULL. Any downstream code that expects a NOT NULL varchar after a rollback will break, so the team has accepted this as a one-way door.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 7,
+          "phase": "change",
+          "location": {
+            "file": "migrations/1777033895000-address-book-attribution-to-user-id.ts",
+            "line_range": [
+              46,
+              60
+            ]
+          },
+          "action": "flick-back",
+          "narration": "One subtle point worth flagging: the pre-flight subquery uses OR logic to detect unresolvable rows. A row that fails only one of the two columns will still trigger the guard, which is the correct behavior, but the SQL deserves a careful read to confirm it handles every edge case, especially rows where one column is already null.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 8,
+          "phase": "change",
+          "location": {
+            "file": "src/modules/spaces/datasources/entities/address-book-item.entity.db.ts",
+            "line_range": [
+              17,
+              45
+            ],
+            "symbol": "AddressBookItem"
+          },
+          "action": "open",
+          "narration": "The TypeORM entity reflects the schema change directly. The created_by and last_updated_by columns are now typed as number and declared as integer columns, and the database address transformer that used to normalize wallet address casing has been removed entirely. This is the source of truth that TypeORM uses to generate queries.",
+          "callouts": [
+            {
+              "file": "src/modules/spaces/domain/address-books/entities/address-book-item.db.entity.ts",
+              "line": 12,
+              "note": "Zod schema also updated in parallel"
+            }
+          ],
+          "estimated_seconds": 13
+        },
+        {
+          "step": 9,
+          "phase": "change",
+          "location": {
+            "file": "src/modules/spaces/domain/address-books/entities/address-book-item.db.entity.ts",
+            "line_range": [
+              12,
+              30
+            ],
+            "symbol": "AddressBookDbItemSchema"
+          },
+          "action": "open",
+          "narration": "The Zod schema for the DB entity mirrors the entity change. The created_by and last_updated_by fields move from the address schema type to z.number().int(), so any value coming out of the database that is not a plain integer will now fail validation at the Zod boundary rather than silently passing through as a string.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 10,
+          "phase": "change",
+          "location": {
+            "file": "src/modules/spaces/routes/entities/space-address-book.dto.entity.ts",
+            "line_range": [
+              5,
+              30
+            ],
+            "symbol": "SpaceAddressBookItemDto"
+          },
+          "action": "open",
+          "narration": "The API-facing DTO is deliberately decoupled from the DB entity type. The created_by and last_updated_by fields are now explicitly typed as string in the DTO, and the Swagger descriptions are updated to say user ID of the creator and last updater. This means the API contract is stable even if the DB column type changes again in the future, but it also means drift between the two layers is now invisible to the compiler.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 11,
+          "phase": "change",
+          "location": {
+            "file": "src/modules/spaces/routes/address-books.service.ts",
+            "line_range": [
+              1,
+              50
+            ],
+            "symbol": "AddressBooksService"
+          },
+          "action": "open",
+          "narration": "Back in the service, the two isSiwe guard calls are simply gone. The forbidden exception import is also removed. In their place, the mapping from DB item to DTO now calls toString on the numeric created_by and last_updated_by values, converting the integer user ID into the string the DTO contract expects.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 12,
+          "phase": "change",
+          "location": {
+            "file": "src/modules/spaces/domain/address-books/address-book-items.repository.ts",
+            "line_range": [
+              18,
+              70
+            ],
+            "symbol": "AddressBookItemsRepository"
+          },
+          "action": "open",
+          "narration": "In the repository, the isSiwe guards are also removed from both create and update paths. The key change is that getAuthenticatedUserIdOrFail is called once at the top of upsertAddressBookItems, and the resolved numeric user ID is then threaded down into both createNewAddressBookItems and updateExistingAddressBookItems as a plain number argument.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 13,
+          "phase": "ripple",
+          "location": {
+            "file": "src/modules/spaces/domain/address-books/entities/__tests__/address-book-item.db.builder.ts",
+            "line_range": [
+              11,
+              35
+            ],
+            "symbol": "addressBookItemBuilder"
+          },
+          "action": "open",
+          "narration": "The test builder is updated to match. The created_by and last_updated_by fields now generate random integers using faker's number generator bounded by the database max safe integer constant, replacing the old ethereum address generation. Any test that previously asserted these fields look like wallet addresses will need to be updated.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 14,
+          "phase": "ripple",
+          "location": {
+            "file": "src/modules/spaces/domain/address-books/address-book-items.repository.integration.spec.ts",
+            "line_range": [
+              1,
+              50
+            ]
+          },
+          "action": "open",
+          "narration": "The integration tests gain two new helpers: createOidcUser and createSpaceAsOidcAdmin. These stand up the database state needed to exercise the OIDC write path end to end. Two new test cases cover OIDC upsert and OIDC delete, confirming that the full stack works without a wallet address in the picture.",
+          "callouts": [
+            {
+              "file": "src/modules/spaces/routes/address-books.service.spec.ts",
+              "line": 1,
+              "note": "Unit tests also replace forbidden-exception cases with it.each covering both SIWE and OIDC"
+            }
+          ],
+          "estimated_seconds": 13
+        },
+        {
+          "step": 15,
+          "phase": "risk",
+          "location": {
+            "file": "migrations/1777033895000-address-book-attribution-to-user-id.ts",
+            "line_range": [
+              46,
+              75
+            ]
+          },
+          "action": "flick-back",
+          "narration": "The migration has no explicit transaction wrapping the backfill, the NOT NULL enforcement, and the column drop. If the process crashes between the backfill and the NOT NULL statement, the table is left with nullable integer columns and no constraint. On a large table this window is real, and a partial failure here is hard to recover from cleanly.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 16,
+          "phase": "risk",
+          "location": {
+            "file": "src/modules/spaces/datasources/entities/address-book-item.entity.db.ts",
+            "line_range": [
+              17,
+              45
+            ],
+            "symbol": "AddressBookItem"
+          },
+          "action": "scroll-to",
+          "narration": "There is no foreign key constraint added on the new integer columns referencing users dot id. This means if a user is deleted, their ID can remain in created_by and last_updated_by indefinitely with no referential integrity error. Orphaned user IDs will accumulate silently unless the application layer cleans them up.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 17,
+          "phase": "risk",
+          "location": {
+            "file": "src/modules/spaces/routes/address-books.service.ts",
+            "line_range": [
+              1,
+              50
+            ],
+            "symbol": "AddressBooksService"
+          },
+          "action": "scroll-to",
+          "narration": "The toString call on created_by and last_updated_by in the DTO mapping will throw at runtime if either value is null or undefined. The migration enforces NOT NULL, but if the migration has not run yet in a given environment, or if a rollback has occurred, null values are possible and this code path will crash.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 18,
+          "phase": "risk",
+          "location": {
+            "file": "src/modules/spaces/routes/entities/space-address-book.dto.entity.ts",
+            "line_range": [
+              5,
+              30
+            ],
+            "symbol": "SpaceAddressBookItemDto"
+          },
+          "action": "scroll-to",
+          "narration": "This is a breaking API change with no versioning guard. Any client reading created_by or last_updated_by as a wallet address string will now receive a numeric string like forty-two instead of a hex address. The DTO has no validation decorator enforcing the new format, so malformed values could slip through without a clear error signal to the caller.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 19,
+          "phase": "wrap",
+          "location": {
+            "file": "src/modules/spaces/domain/address-books/address-book-items.repository.ts",
+            "line_range": [
+              18,
+              70
+            ],
+            "symbol": "AddressBookItemsRepository"
+          },
+          "action": "flick-back",
+          "narration": "Bottom line: this PR successfully unblocks OIDC users from address book writes by migrating attribution from wallet addresses to numeric user IDs across the migration, entity, schema, service, and repository layers, but it ships a breaking API change and a migration without transaction safety, so coordinate client updates and validate the migration carefully before deploying to production.",
+          "estimated_seconds": 16
+        }
+      ]
+    },
+    "created_at": 1777046233264
+  },
+  "tour": {
+    "chapters": [
+      {
+        "title": "Why this change",
+        "step_range": [
+          1,
+          2
+        ]
+      },
+      {
+        "title": "The database migration",
+        "step_range": [
+          3,
+          7
+        ]
+      },
+      {
+        "title": "Entity and schema updates",
+        "step_range": [
+          8,
+          10
+        ]
+      },
+      {
+        "title": "Service and repository rewiring",
+        "step_range": [
+          11,
+          14
+        ]
+      },
+      {
+        "title": "What can go wrong",
+        "step_range": [
+          15,
+          18
+        ]
+      },
+      {
+        "title": "Closing the loop",
+        "step_range": [
+          19,
+          19
+        ]
+      }
+    ],
+    "total_seconds": 255,
+    "steps": [
+      {
+        "step": 1,
+        "phase": "motivation",
+        "location": {
+          "file": "src/modules/spaces/routes/address-books.service.ts",
+          "line_range": [
+            1,
+            20
+          ],
+          "symbol": "AddressBooksService"
+        },
+        "action": "open",
+        "narration": "Here is the problem this PR is solving. OIDC-authenticated users, those who log in with email rather than a wallet, were blocked from writing to the address book because the attribution columns stored wallet addresses, and email-only users simply have no wallet address to store. The fix is to swap those columns from wallet address strings to numeric user IDs, which every authenticated user has regardless of login method.",
+        "estimated_seconds": 20
+      },
+      {
+        "step": 2,
+        "phase": "motivation",
+        "location": {
+          "file": "src/modules/spaces/routes/address-books.service.ts",
+          "line_range": [
+            1,
+            20
+          ],
+          "symbol": "AddressBooksService"
+        },
+        "action": "scroll-to",
+        "narration": "This diagram shows the before-and-after flow for a write operation. Previously, OIDC users hit a forbidden wall at the service layer. After this PR, both SIWE and OIDC users reach the repository, and attribution is resolved through a shared helper that returns a numeric user ID.",
+        "estimated_seconds": 15,
+        "diagram": {
+          "kind": "flowchart",
+          "title": "Auth flow before and after",
+          "mermaid": "flowchart TD\n  A[Client write request] --> B{Auth type?}\n  B -- SIWE --> C[isSiwe guard passes]\n  B -- OIDC --> D[isSiwe guard BLOCKS - old]\n  B -- OIDC --> E[getAuthenticatedUserIdOrFail - new]\n  C --> F[attribute via signer_address - old]\n  C --> G[attribute via userId integer - new]\n  E --> G\n  G --> H[upsert to DB]"
+        }
+      },
+      {
+        "step": 3,
+        "phase": "change",
+        "location": {
+          "file": "migrations/1777033895000-address-book-attribution-to-user-id.ts",
+          "line_range": [
+            1,
+            20
+          ],
+          "symbol": "AddressBookAttributionToUserId1777033895000"
+        },
+        "action": "open",
+        "narration": "The migration class is the foundation of everything else in this PR. It carries a timestamp well into the future, so double-check that your migration runner orders by timestamp and that this does not collide with anything already in flight. The class name makes the intent clear: attribution columns are moving to user ID.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 4,
+        "phase": "change",
+        "location": {
+          "file": "migrations/1777033895000-address-book-attribution-to-user-id.ts",
+          "line_range": [
+            21,
+            45
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "The up migration starts with a pre-flight guard. It checks whether any row in space_address_book_items has a created_by or last_updated_by wallet address that cannot be resolved to a user ID via the wallets table. If even one row fails resolution, the migration throws loudly rather than silently producing nulls. This is a good defensive pattern.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 5,
+        "phase": "change",
+        "location": {
+          "file": "migrations/1777033895000-address-book-attribution-to-user-id.ts",
+          "line_range": [
+            46,
+            75
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "After the guard, the migration adds two new integer columns, backfills them by joining against the wallets table, drops the old varchar columns, renames the new ones, and finally enforces NOT NULL. These are separate statements with no explicit transaction wrapping, so a failure mid-sequence could leave the table in a partially migrated state.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 6,
+        "phase": "change",
+        "location": {
+          "file": "migrations/1777033895000-address-book-attribution-to-user-id.ts",
+          "line_range": [
+            76,
+            110
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "The down migration reverses the process, but it is explicitly lossy. For users who authenticated via OIDC and have no wallet, the rollback leaves those attribution columns as NULL. Any downstream code that expects a NOT NULL varchar after a rollback will break, so the team has accepted this as a one-way door.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 7,
+        "phase": "change",
+        "location": {
+          "file": "migrations/1777033895000-address-book-attribution-to-user-id.ts",
+          "line_range": [
+            46,
+            60
+          ]
+        },
+        "action": "flick-back",
+        "narration": "One subtle point worth flagging: the pre-flight subquery uses OR logic to detect unresolvable rows. A row that fails only one of the two columns will still trigger the guard, which is the correct behavior, but the SQL deserves a careful read to confirm it handles every edge case, especially rows where one column is already null.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 8,
+        "phase": "change",
+        "location": {
+          "file": "src/modules/spaces/datasources/entities/address-book-item.entity.db.ts",
+          "line_range": [
+            17,
+            45
+          ],
+          "symbol": "AddressBookItem"
+        },
+        "action": "open",
+        "narration": "The TypeORM entity reflects the schema change directly. The created_by and last_updated_by columns are now typed as number and declared as integer columns, and the database address transformer that used to normalize wallet address casing has been removed entirely. This is the source of truth that TypeORM uses to generate queries.",
+        "callouts": [
+          {
+            "file": "src/modules/spaces/domain/address-books/entities/address-book-item.db.entity.ts",
+            "line": 12,
+            "note": "Zod schema also updated in parallel"
+          }
+        ],
+        "estimated_seconds": 13
+      },
+      {
+        "step": 9,
+        "phase": "change",
+        "location": {
+          "file": "src/modules/spaces/domain/address-books/entities/address-book-item.db.entity.ts",
+          "line_range": [
+            12,
+            30
+          ],
+          "symbol": "AddressBookDbItemSchema"
+        },
+        "action": "open",
+        "narration": "The Zod schema for the DB entity mirrors the entity change. The created_by and last_updated_by fields move from the address schema type to z.number().int(), so any value coming out of the database that is not a plain integer will now fail validation at the Zod boundary rather than silently passing through as a string.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 10,
+        "phase": "change",
+        "location": {
+          "file": "src/modules/spaces/routes/entities/space-address-book.dto.entity.ts",
+          "line_range": [
+            5,
+            30
+          ],
+          "symbol": "SpaceAddressBookItemDto"
+        },
+        "action": "open",
+        "narration": "The API-facing DTO is deliberately decoupled from the DB entity type. The created_by and last_updated_by fields are now explicitly typed as string in the DTO, and the Swagger descriptions are updated to say user ID of the creator and last updater. This means the API contract is stable even if the DB column type changes again in the future, but it also means drift between the two layers is now invisible to the compiler.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 11,
+        "phase": "change",
+        "location": {
+          "file": "src/modules/spaces/routes/address-books.service.ts",
+          "line_range": [
+            1,
+            50
+          ],
+          "symbol": "AddressBooksService"
+        },
+        "action": "open",
+        "narration": "Back in the service, the two isSiwe guard calls are simply gone. The forbidden exception import is also removed. In their place, the mapping from DB item to DTO now calls toString on the numeric created_by and last_updated_by values, converting the integer user ID into the string the DTO contract expects.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 12,
+        "phase": "change",
+        "location": {
+          "file": "src/modules/spaces/domain/address-books/address-book-items.repository.ts",
+          "line_range": [
+            18,
+            70
+          ],
+          "symbol": "AddressBookItemsRepository"
+        },
+        "action": "open",
+        "narration": "In the repository, the isSiwe guards are also removed from both create and update paths. The key change is that getAuthenticatedUserIdOrFail is called once at the top of upsertAddressBookItems, and the resolved numeric user ID is then threaded down into both createNewAddressBookItems and updateExistingAddressBookItems as a plain number argument.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 13,
+        "phase": "ripple",
+        "location": {
+          "file": "src/modules/spaces/domain/address-books/entities/__tests__/address-book-item.db.builder.ts",
+          "line_range": [
+            11,
+            35
+          ],
+          "symbol": "addressBookItemBuilder"
+        },
+        "action": "open",
+        "narration": "The test builder is updated to match. The created_by and last_updated_by fields now generate random integers using faker's number generator bounded by the database max safe integer constant, replacing the old ethereum address generation. Any test that previously asserted these fields look like wallet addresses will need to be updated.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 14,
+        "phase": "ripple",
+        "location": {
+          "file": "src/modules/spaces/domain/address-books/address-book-items.repository.integration.spec.ts",
+          "line_range": [
+            1,
+            50
+          ]
+        },
+        "action": "open",
+        "narration": "The integration tests gain two new helpers: createOidcUser and createSpaceAsOidcAdmin. These stand up the database state needed to exercise the OIDC write path end to end. Two new test cases cover OIDC upsert and OIDC delete, confirming that the full stack works without a wallet address in the picture.",
+        "callouts": [
+          {
+            "file": "src/modules/spaces/routes/address-books.service.spec.ts",
+            "line": 1,
+            "note": "Unit tests also replace forbidden-exception cases with it.each covering both SIWE and OIDC"
+          }
+        ],
+        "estimated_seconds": 13
+      },
+      {
+        "step": 15,
+        "phase": "risk",
+        "location": {
+          "file": "migrations/1777033895000-address-book-attribution-to-user-id.ts",
+          "line_range": [
+            46,
+            75
+          ]
+        },
+        "action": "flick-back",
+        "narration": "The migration has no explicit transaction wrapping the backfill, the NOT NULL enforcement, and the column drop. If the process crashes between the backfill and the NOT NULL statement, the table is left with nullable integer columns and no constraint. On a large table this window is real, and a partial failure here is hard to recover from cleanly.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 16,
+        "phase": "risk",
+        "location": {
+          "file": "src/modules/spaces/datasources/entities/address-book-item.entity.db.ts",
+          "line_range": [
+            17,
+            45
+          ],
+          "symbol": "AddressBookItem"
+        },
+        "action": "scroll-to",
+        "narration": "There is no foreign key constraint added on the new integer columns referencing users dot id. This means if a user is deleted, their ID can remain in created_by and last_updated_by indefinitely with no referential integrity error. Orphaned user IDs will accumulate silently unless the application layer cleans them up.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 17,
+        "phase": "risk",
+        "location": {
+          "file": "src/modules/spaces/routes/address-books.service.ts",
+          "line_range": [
+            1,
+            50
+          ],
+          "symbol": "AddressBooksService"
+        },
+        "action": "scroll-to",
+        "narration": "The toString call on created_by and last_updated_by in the DTO mapping will throw at runtime if either value is null or undefined. The migration enforces NOT NULL, but if the migration has not run yet in a given environment, or if a rollback has occurred, null values are possible and this code path will crash.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 18,
+        "phase": "risk",
+        "location": {
+          "file": "src/modules/spaces/routes/entities/space-address-book.dto.entity.ts",
+          "line_range": [
+            5,
+            30
+          ],
+          "symbol": "SpaceAddressBookItemDto"
+        },
+        "action": "scroll-to",
+        "narration": "This is a breaking API change with no versioning guard. Any client reading created_by or last_updated_by as a wallet address string will now receive a numeric string like forty-two instead of a hex address. The DTO has no validation decorator enforcing the new format, so malformed values could slip through without a clear error signal to the caller.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 19,
+        "phase": "wrap",
+        "location": {
+          "file": "src/modules/spaces/domain/address-books/address-book-items.repository.ts",
+          "line_range": [
+            18,
+            70
+          ],
+          "symbol": "AddressBookItemsRepository"
+        },
+        "action": "flick-back",
+        "narration": "Bottom line: this PR successfully unblocks OIDC users from address book writes by migrating attribution from wallet addresses to numeric user IDs across the migration, entity, schema, service, and repository layers, but it ships a breaking API change and a migration without transaction safety, so coordinate client updates and validate the migration carefully before deploying to production.",
+        "estimated_seconds": 16
+      }
+    ]
+  },
+  "markdown": "# PR Briefing — #3056: migrating addressBook createdBy updatedBy to be userId\n\n**Repo:** `safe-global/safe-client-gateway`  \n**Author:** 0xAryanShah  \n**Branch:** `main` ← `feat/address-book-attribution-to-user-id` (`2fa1fba`)  \n**URL:** https://github.com/safe-global/safe-client-gateway/pull/3056\n\n## Summary\n\nThis PR migrates `space_address_book_items.created_by` and `last_updated_by` columns from `varchar(42)` wallet addresses to `integer` user IDs, unblocking OIDC-authenticated users from writing address book entries. A new TypeORM migration (`AddressBookAttributionToUserId1777033895000`) handles the schema change with a pre-flight guard, backfill via a `wallets` table JOIN, column drop, and rename. The `isSiwe()` guards previously blocking OIDC users in `AddressBooksService` and `AddressBookItemsRepository` are removed, with attribution now sourced from `getAuthenticatedUserIdOrFail(authPayload)`. This is a breaking API change: `createdBy`/`lastUpdatedBy` in GET responses change from wallet address strings like `'0xAbc...'` to numeric user ID strings like `'42'`, requiring coordinated client updates.\n\n## Architecture notes\n\nThe change touches four layers: the database migration, the TypeORM entity (`AddressBookItem`), the Zod DB schema (`AddressBookDbItemSchema`), and the service/repository layer (`AddressBooksService`, `AddressBookItemsRepository`). The DTO (`SpaceAddressBookItemDto`) is explicitly typed as `string` and decoupled from the DB entity type, meaning future DB type changes won't automatically propagate to the API contract. Attribution resolution is centralized: `getAuthenticatedUserIdOrFail` is called once in `upsertAddressBookItems` and the resolved `userId` is threaded into both `createNewAddressBookItems` and `updateExistingAddressBookItems`. No foreign key constraint is added on the new integer columns referencing `users.id`, so orphaned user IDs can accumulate silently.\n\n## Ripple risks\n\nAnalyzed 6 changed exports. No untouched external callers found — all usages appear to be inside the PR diff.\n\n_Analyzed 9 file(s), 7 changed export(s), 0 uncovered callsite(s) in 1.8s._\n\n## Walkthrough outline\n\n_19 steps across 6 chapters, approximately 4 min 15s._\n\n### Why this change\n\n1. **motivation** · `src/modules/spaces/routes/address-books.service.ts` L1-20 `AddressBooksService`\n   Here is the problem this PR is solving. OIDC-authenticated users, those who log in with email rather than a wallet, were blocked from writing to the address book because the attribution columns stored wallet addresses, and email-only users simply have no wallet address to store. The fix is to swap those columns from wallet address strings to numeric user IDs, which every authenticated user has regardless of login method.\n\n2. **motivation** · `src/modules/spaces/routes/address-books.service.ts` L1-20 `AddressBooksService`\n   This diagram shows the before-and-after flow for a write operation. Previously, OIDC users hit a forbidden wall at the service layer. After this PR, both SIWE and OIDC users reach the repository, and attribution is resolved through a shared helper that returns a numeric user ID.\n\n### The database migration\n\n3. **change** · `migrations/1777033895000-address-book-attribution-to-user-id.ts` L1-20 `AddressBookAttributionToUserId1777033895000`\n   The migration class is the foundation of everything else in this PR. It carries a timestamp well into the future, so double-check that your migration runner orders by timestamp and that this does not collide with anything already in flight. The class name makes the intent clear: attribution columns are moving to user ID.\n\n4. **change** · `migrations/1777033895000-address-book-attribution-to-user-id.ts` L21-45\n   The up migration starts with a pre-flight guard. It checks whether any row in space_address_book_items has a created_by or last_updated_by wallet address that cannot be resolved to a user ID via the wallets table. If even one row fails resolution, the migration throws loudly rather than silently producing nulls. This is a good defensive pattern.\n\n5. **change** · `migrations/1777033895000-address-book-attribution-to-user-id.ts` L46-75\n   After the guard, the migration adds two new integer columns, backfills them by joining against the wallets table, drops the old varchar columns, renames the new ones, and finally enforces NOT NULL. These are separate statements with no explicit transaction wrapping, so a failure mid-sequence could leave the table in a partially migrated state.\n\n6. **change** · `migrations/1777033895000-address-book-attribution-to-user-id.ts` L76-110\n   The down migration reverses the process, but it is explicitly lossy. For users who authenticated via OIDC and have no wallet, the rollback leaves those attribution columns as NULL. Any downstream code that expects a NOT NULL varchar after a rollback will break, so the team has accepted this as a one-way door.\n\n7. **change** · `migrations/1777033895000-address-book-attribution-to-user-id.ts` L46-60\n   One subtle point worth flagging: the pre-flight subquery uses OR logic to detect unresolvable rows. A row that fails only one of the two columns will still trigger the guard, which is the correct behavior, but the SQL deserves a careful read to confirm it handles every edge case, especially rows where one column is already null.\n\n### Entity and schema updates\n\n8. **change** · `src/modules/spaces/datasources/entities/address-book-item.entity.db.ts` L17-45 `AddressBookItem`\n   The TypeORM entity reflects the schema change directly. The created_by and last_updated_by columns are now typed as number and declared as integer columns, and the database address transformer that used to normalize wallet address casing has been removed entirely. This is the source of truth that TypeORM uses to generate queries.\n\n9. **change** · `src/modules/spaces/domain/address-books/entities/address-book-item.db.entity.ts` L12-30 `AddressBookDbItemSchema`\n   The Zod schema for the DB entity mirrors the entity change. The created_by and last_updated_by fields move from the address schema type to z.number().int(), so any value coming out of the database that is not a plain integer will now fail validation at the Zod boundary rather than silently passing through as a string.\n\n10. **change** · `src/modules/spaces/routes/entities/space-address-book.dto.entity.ts` L5-30 `SpaceAddressBookItemDto`\n   The API-facing DTO is deliberately decoupled from the DB entity type. The created_by and last_updated_by fields are now explicitly typed as string in the DTO, and the Swagger descriptions are updated to say user ID of the creator and last updater. This means the API contract is stable even if the DB column type changes again in the future, but it also means drift between the two layers is now invisible to the compiler.\n\n### Service and repository rewiring\n\n11. **change** · `src/modules/spaces/routes/address-books.service.ts` L1-50 `AddressBooksService`\n   Back in the service, the two isSiwe guard calls are simply gone. The forbidden exception import is also removed. In their place, the mapping from DB item to DTO now calls toString on the numeric created_by and last_updated_by values, converting the integer user ID into the string the DTO contract expects.\n\n12. **change** · `src/modules/spaces/domain/address-books/address-book-items.repository.ts` L18-70 `AddressBookItemsRepository`\n   In the repository, the isSiwe guards are also removed from both create and update paths. The key change is that getAuthenticatedUserIdOrFail is called once at the top of upsertAddressBookItems, and the resolved numeric user ID is then threaded down into both createNewAddressBookItems and updateExistingAddressBookItems as a plain number argument.\n\n13. **ripple** · `src/modules/spaces/domain/address-books/entities/__tests__/address-book-item.db.builder.ts` L11-35 `addressBookItemBuilder`\n   The test builder is updated to match. The created_by and last_updated_by fields now generate random integers using faker's number generator bounded by the database max safe integer constant, replacing the old ethereum address generation. Any test that previously asserted these fields look like wallet addresses will need to be updated.\n\n14. **ripple** · `src/modules/spaces/domain/address-books/address-book-items.repository.integration.spec.ts` L1-50\n   The integration tests gain two new helpers: createOidcUser and createSpaceAsOidcAdmin. These stand up the database state needed to exercise the OIDC write path end to end. Two new test cases cover OIDC upsert and OIDC delete, confirming that the full stack works without a wallet address in the picture.\n\n### What can go wrong\n\n15. **risk** · `migrations/1777033895000-address-book-attribution-to-user-id.ts` L46-75\n   The migration has no explicit transaction wrapping the backfill, the NOT NULL enforcement, and the column drop. If the process crashes between the backfill and the NOT NULL statement, the table is left with nullable integer columns and no constraint. On a large table this window is real, and a partial failure here is hard to recover from cleanly.\n\n16. **risk** · `src/modules/spaces/datasources/entities/address-book-item.entity.db.ts` L17-45 `AddressBookItem`\n   There is no foreign key constraint added on the new integer columns referencing users dot id. This means if a user is deleted, their ID can remain in created_by and last_updated_by indefinitely with no referential integrity error. Orphaned user IDs will accumulate silently unless the application layer cleans them up.\n\n17. **risk** · `src/modules/spaces/routes/address-books.service.ts` L1-50 `AddressBooksService`\n   The toString call on created_by and last_updated_by in the DTO mapping will throw at runtime if either value is null or undefined. The migration enforces NOT NULL, but if the migration has not run yet in a given environment, or if a rollback has occurred, null values are possible and this code path will crash.\n\n18. **risk** · `src/modules/spaces/routes/entities/space-address-book.dto.entity.ts` L5-30 `SpaceAddressBookItemDto`\n   This is a breaking API change with no versioning guard. Any client reading created_by or last_updated_by as a wallet address string will now receive a numeric string like forty-two instead of a hex address. The DTO has no validation decorator enforcing the new format, so malformed values could slip through without a clear error signal to the caller.\n\n### Closing the loop\n\n19. **wrap** · `src/modules/spaces/domain/address-books/address-book-items.repository.ts` L18-70 `AddressBookItemsRepository`\n   Bottom line: this PR successfully unblocks OIDC users from address book writes by migrating attribution from wallet addresses to numeric user IDs across the migration, entity, schema, service, and repository layers, but it ships a breaking API change and a migration without transaction safety, so coordinate client updates and validate the migration carefully before deploying to production.\n\n## Reviewer checklist\n\n- [ ] Verify the migration's pre-flight SQL logic correctly catches rows where either `created_by` OR `last_updated_by` cannot be resolved to a user ID, and confirm the backfill + NOT NULL steps are wrapped in a transaction to prevent partial failure leaving nullable columns.\n- [ ] Confirm no remaining `isSiwe()` guards or `signer_address` usages exist in the `deleteAddressBookItems` path or any other address-book write path not covered by this diff.\n- [ ] Check that `item.createdBy` and `item.lastUpdatedBy` are guaranteed non-null before `.toString()` is called in `AddressBooksService`, and that `z.number().int()` in `AddressBookDbItemSchema` correctly rejects null/undefined values post-migration.\n- [ ] Validate that the `Number(authPayload.sub)` conversion in integration test helpers cannot silently produce `NaN` (e.g., if `sub` is a non-numeric OIDC subject), and that `createSpaceAsOidcAdmin` reliably extracts `id` from `generatedMaps[0]`.\n- [ ] Confirm that downstream API clients consuming `createdBy`/`lastUpdatedBy` as wallet address strings have been updated or are being updated in a coordinated release, given this is an undocumented breaking change with no API versioning guard.\n- [ ] Check whether a foreign key constraint on the new integer `created_by`/`last_updated_by` columns referencing `users.id` should be added to prevent orphaned attribution records.\n\n## File-by-file\n\n### `migrations/1777033895000-address-book-attribution-to-user-id.ts`\n\nAdds migration `AddressBookAttributionToUserId1777033895000` that converts `space_address_book_items.created_by` and `last_updated_by` from `varchar(42)` wallet addresses to `integer` user IDs, with a pre-flight guard, backfill via `wallets` table JOIN, drop of old columns, rename, and NOT NULL enforcement. The `down` migration reverses the process in a lossy, best-effort manner.\n\n_Enables OIDC-authenticated users (who have no wallet address) to be attributed as authors of address book entries by switching the attribution key to `users.id`._\n\n**Risks:**\n- Pre-flight check uses OR instead of AND: a row where only one of created_by/last_updated_by is unresolvable may not be caught correctly — the subquery logic `NOT EXISTS(...) OR NOT EXISTS(...)` is evaluated per-row but the outer EXISTS wraps the whole set, so a row failing only one column will still trigger, but verify the SQL logic is correct under all edge cases\n- No foreign key constraint added on the new integer columns referencing `users.id` — orphaned user IDs could accumulate silently\n- Backfill and NOT NULL are separate statements with no transaction wrapping; a failure between backfill and NOT NULL could leave nullable columns without the constraint\n- Down migration picks an arbitrary wallet (LIMIT 1) for multi-wallet users and leaves NULLs for OIDC entries — downstream code expecting NOT NULL varchar after rollback will break\n- Migration timestamp 1777033895000 is far in the future (year 2026+); verify this doesn't conflict with ordering assumptions in the migration runner\n- No index added on the new integer `created_by`/`last_updated_by` columns if queries filter by them\n- If the table is large, the multi-step ALTER/UPDATE sequence without explicit transaction could leave the table in an inconsistent state on partial failure\n\n### `src/modules/spaces/datasources/entities/address-book-item.entity.db.ts`\n\nIn `AddressBookItem` entity, `createdBy` and `lastUpdatedBy` columns changed from `varchar(42)` with `databaseAddressTransformer` (typed as `Address`) to `integer` (typed as `number`), removing the address transformer.\n\n_Stores user IDs instead of wallet addresses for attribution, enabling OIDC users (who have no wallet address) to create/update address book entries._\n\n**Risks:**\n- DomainAddressBookItem interface must also be updated to reflect number type or a type mismatch will exist at compile time\n- Any existing serialization/deserialization code that expects createdBy/lastUpdatedBy to be an address string will break silently if not updated\n- The database migration must guarantee no NULL or unresolvable rows remain before the column type change, otherwise the NOT NULL constraint will fail\n- Downstream API consumers receive numeric user ID strings instead of wallet addresses — breaking change with no versioning guard visible here\n- Removal of databaseAddressTransformer means no normalization (e.g., checksum casing) is applied; verify no code paths still pass an address to these fields\n\n### `src/modules/spaces/domain/address-books/address-book-items.repository.integration.spec.ts`\n\nIntegration tests updated to replace `authPayload.signer_address` (wallet address string) with `Number(authPayload.sub)` (user ID integer) for `createdBy`/`lastUpdatedBy` fields, and two new OIDC-specific test helpers (`createOidcUser`, `createSpaceAsOidcAdmin`) plus two new OIDC test cases (upsert and delete) were added.\n\n_Validates that address book write operations work correctly for OIDC users who have no wallet address, using numeric user IDs for attribution instead._\n\n**Risks:**\n- createSpaceAsOidcAdmin uses `space.generatedMaps[0]` for both the member insert and the returned spaceId — verify this map reliably contains `id` for the TypeORM insert result\n- `Number(authPayload.sub)` silently returns NaN if `sub` is not a numeric string; no assertion guards against this in the helpers\n- createOidcUser uses `user.generatedMaps[0].id` but also returns `user.raw[0]` — confirm `raw[0]` is a valid User entity with an `id` property for the member insert\n- invitedBy in createSpaceAsOidcAdmin is set to a random Ethereum address, which may be inconsistent with the OIDC-only intent and could mask bugs if invitedBy is later validated\n- The renamed test 'should throw ForbiddenException' → 'should throw NotFoundException' should be verified against actual repository behavior to ensure the exception type is correct\n\n### `src/modules/spaces/domain/address-books/address-book-items.repository.ts`\n\nRemoved `isSiwe()` guards and `ForbiddenException` from `updateExistingAddressBookItems` and `createNewAddressBookItems`; replaced `authPayload.signer_address` (wallet address string) with `userId` (number from `getAuthenticatedUserIdOrFail`) for `createdBy`/`lastUpdatedBy` fields. `getAuthenticatedUserIdOrFail` is now called once in `upsertAddressBookItems` and the resolved `userId` is threaded down.\n\n_Allows OIDC-authenticated users (who have no wallet address) to write address book entries by attributing writes to the numeric user ID instead of a wallet address._\n\n**Risks:**\n- Verify `createdBy`/`lastUpdatedBy` DB columns are now integer type (migration applied) before this code runs, otherwise type mismatch at insert/update\n- Check that `getAuthenticatedUserIdOrFail` throws appropriately for unauthenticated callers — the old guards were redundant but explicit; confirm no regression in auth enforcement\n- API consumers reading `createdBy`/`lastUpdatedBy` as wallet address strings will break — confirm client-side changes are coordinated\n- Down migration is lossy for OIDC entries; verify rollback strategy is acceptable\n- deleteAddressBookItems path (not shown in diff) should also be checked for any remaining `isSiwe()` guards or `signer_address` usage\n\n### `src/modules/spaces/domain/address-books/entities/__tests__/address-book-item.db.builder.ts`\n\nIn `addressBookItemBuilder`, `createdBy` and `lastUpdatedBy` fields changed from `getAddress(faker.finance.ethereumAddress())` (wallet address strings) to `faker.number.int({ min: 1, max: DB_MAX_SAFE_INTEGER })` (integer user IDs). A license header was also added.\n\n_Aligns the test builder with the schema migration that changes attribution columns from varchar wallet addresses to integer user IDs, ensuring tests reflect the new data shape._\n\n**Risks:**\n- DB_MAX_SAFE_INTEGER import should be verified to match the actual PostgreSQL integer max (2147483647) to avoid generating out-of-range values\n- Any existing tests relying on the old builder that assert createdBy/lastUpdatedBy as address strings will silently pass wrong types if not updated\n- min: 1 assumes user IDs are never 0 — verify this constraint holds in the actual schema/domain\n\n### `src/modules/spaces/domain/address-books/entities/address-book-item.db.entity.ts`\n\nIn `AddressBookDbItemSchema`, `createdBy` and `lastUpdatedBy` fields changed from `AddressSchema as z.ZodType<Address>` (wallet address strings) to `z.number().int()` (integer user IDs), with corresponding TypeScript type changes from `Address` to `number`.\n\n_Aligns the DB entity schema with the migration that replaces varchar wallet address columns with integer user ID columns, enabling OIDC users (who have no wallet address) to be attributed as authors._\n\n**Risks:**\n- Any existing code reading createdBy/lastUpdatedBy as Address strings will now receive numbers — check all consumers of AddressBookDbItem for type compatibility\n- The SPDX license header addition is unrelated to the functional change — verify it's intentional and consistent with other files\n- Ensure the z.number().int() validation correctly rejects non-integer or null values that might exist during/after migration backfill\n\n### `src/modules/spaces/routes/address-books.service.spec.ts`\n\nUnit tests for `AddressBooksService` replace `ForbiddenException` OIDC-blocked tests with `it.each` parameterized tests covering both SIWE and OIDC users for `upsertMany` and `deleteByAddress`, and replace unauthenticated-user `ForbiddenException` assertions with `UnauthorizedException` propagation tests. A new test verifies `createdBy`/`lastUpdatedBy` are serialized as strings.\n\n_Reflects the removal of `isSiwe()` guards that previously blocked OIDC users from write operations, confirming both auth types now succeed and attribution fields are numeric-user-ID-based strings._\n\n**Risks:**\n- The unauthenticated-user tests now mock the repository to throw `UnauthorizedException` rather than asserting the repository is never called — verify the service actually calls `getAuthenticatedUserIdOrFail` before the repository, otherwise the guard logic is untested\n- The `createdBy` serialization test uses `siweAuthPayloadDtoBuilder` but the feature is meant to use user IDs for both auth types; an OIDC variant of this assertion is missing\n- No assertion that `repositoryMock.upsertMany` / `repositoryMock.deleteByAddress` is NOT called when unauthenticated — if the guard was moved into the repository layer, a unit test at the service layer may give false confidence\n\n### `src/modules/spaces/routes/address-books.service.ts`\n\nRemoved two `isSiwe()` guard checks (and the `ForbiddenException` import) from `upsertAddressBookItems` and `deleteByAddress` in `AddressBooksService`, and changed `createdBy`/`lastUpdatedBy` mapping to call `.toString()` on what are now numeric user IDs instead of wallet address strings.\n\n_Allows OIDC-authenticated users (who have no wallet address) to perform address book writes, since attribution is now based on numeric user IDs rather than signer addresses._\n\n**Risks:**\n- If `item.createdBy` or `item.lastUpdatedBy` can be null/undefined, calling `.toString()` will throw at runtime — null safety should be verified\n- Removing the SIWE guard is a security boundary change; confirm that downstream repository methods (`upsertMany`, `deleteByAddress`) still enforce membership/authorization checks for both SIWE and OIDC users\n- API breaking change: consumers of `createdBy`/`lastUpdatedBy` fields will now receive a numeric string instead of a wallet address — verify all clients are updated\n- No fallback if `getAuthenticatedUserIdOrFail` fails inside the repository — confirm error propagation is handled correctly\n\n### `src/modules/spaces/routes/entities/space-address-book.dto.entity.ts`\n\nIn `SpaceAddressBookItemDto`, `createdBy` and `lastUpdatedBy` fields are decoupled from `AddressBookDbItem`'s type (previously typed as `AddressBookDbItem['createdBy']`/`['lastUpdatedBy']`) and explicitly typed as `string`, with Swagger descriptions updated to 'User ID of the creator/last updater'. The `AddressBookDbItem` import is also changed to a type-only import.\n\n_Reflects the migration of `createdBy`/`lastUpdatedBy` from wallet address strings to numeric user ID strings, making the DTO independent of the DB entity's column type so the API contract is explicit._\n\n**Risks:**\n- The field type is `string` but user IDs are numeric integers — callers may expect a number; verify serialization converts int to string consistently\n- Decoupling from `AddressBookDbItem['createdBy']` means future DB type changes won't propagate to the DTO automatically — could cause silent drift\n- No validation decorator (e.g. `@IsString`, `@IsNumberString`) added to enforce the new format at runtime\n\n---\n_Generated by prbrief • model: claude-sonnet-4-6 • 11 LLM calls • $0.20 • 99.4s_",
+  "files": {
+    "src/modules/spaces/routes/address-books.service.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport { IConfigurationService } from '@/config/configuration.service.interface';\nimport { Space } from '@/modules/spaces/datasources/entities/space.entity.db';\nimport { AuthPayload } from '@/modules/auth/domain/entities/auth-payload.entity';\nimport { IAddressBookItemsRepository } from '@/modules/spaces/domain/address-books/address-book-items.repository.interface';\nimport { SpaceAddressBookDto } from '@/modules/spaces/routes/entities/space-address-book.dto.entity';\nimport { Inject } from '@nestjs/common';\nimport { UpsertAddressBookItemsDto } from '@/modules/spaces/routes/entities/upsert-address-book-items.dto.entity';\nimport type { AddressBookDbItem } from '@/modules/spaces/domain/address-books/entities/address-book-item.db.entity';\n\nexport class AddressBooksService {\n  // TODO: Investigate and implement usage of this\n  private readonly maxItems: number;\n\n  constructor(\n    @Inject(IAddressBookItemsRepository)\n    private readonly repository: IAddressBookItemsRepository,\n    @Inject(IConfigurationService)\n    private readonly configurationService: IConfigurationService,\n  ) {\n    this.maxItems = this.configurationService.getOrThrow<number>(\n      'spaces.addressBooks.maxItems',\n    );\n  }\n\n  public async findAllBySpaceId(\n    authPayload: AuthPayload,\n    spaceId: Space['id'],\n  ): Promise<SpaceAddressBookDto> {\n    const addressBookItems = await this.repository.findAllBySpaceId({\n      authPayload,\n      spaceId,\n    });\n\n    return this.mapAddressBookItems(spaceId, addressBookItems);\n  }\n\n  public async upsertMany(\n    authPayload: AuthPayload,\n    spaceId: Space['id'],\n    addressBookItems: UpsertAddressBookItemsDto,\n  ): Promise<SpaceAddressBookDto> {\n    const updatedItems = await this.repository.upsertMany({\n      authPayload,\n      spaceId,\n      addressBookItems: addressBookItems.items,\n    });\n\n    return this.mapAddressBookItems(spaceId, updatedItems);\n  }\n\n  public async deleteByAddress(args: {\n    authPayload: AuthPayload;\n    spaceId: Space['id'];\n    address: AddressBookDbItem['address'];\n  }): Promise<void> {\n    await this.repository.deleteByAddress(args);\n  }\n\n  private mapAddressBookItems(\n    spaceId: Space['id'],\n    items: Array<AddressBookDbItem>,\n  ): SpaceAddressBookDto {\n    const data = items.map((item) => ({\n      name: item.name,\n      address: item.address,\n      chainIds: item.chainIds,\n      createdBy: item.createdBy.toString(),\n      lastUpdatedBy: item.lastUpdatedBy.toString(),\n      createdAt: item.createdAt,\n      updatedAt: item.updatedAt,\n    }));\n\n    return {\n      spaceId: spaceId.toString(),\n      data,\n    };\n  }\n}\n",
+    "migrations/1777033895000-address-book-attribution-to-user-id.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport type { MigrationInterface, QueryRunner } from 'typeorm';\n\nexport class AddressBookAttributionToUserId1777033895000 implements MigrationInterface {\n  public async up(queryRunner: QueryRunner): Promise<void> {\n    // Verify all wallet addresses resolve to a user before altering columns.\n    await queryRunner.query(`\n      DO $$\n      BEGIN\n        IF EXISTS (\n          SELECT 1 FROM space_address_book_items sabi\n          WHERE NOT EXISTS (\n            SELECT 1 FROM wallets w WHERE w.address = sabi.created_by\n          )\n          OR NOT EXISTS (\n            SELECT 1 FROM wallets w WHERE w.address = sabi.last_updated_by\n          )\n        ) THEN\n          RAISE EXCEPTION\n            'Unresolvable wallet addresses in space_address_book_items. '\n            'Every created_by/last_updated_by must map to a wallets row.';\n        END IF;\n      END $$;\n    `);\n\n    // Add new integer columns for user ID attribution.\n    await queryRunner.query(`\n      ALTER TABLE space_address_book_items\n        ADD COLUMN created_by_uid integer,\n        ADD COLUMN last_updated_by_uid integer;\n    `);\n\n    // Backfill: resolve wallet addresses to user IDs via the wallets table.\n    await queryRunner.query(`\n      UPDATE space_address_book_items sabi\n      SET created_by_uid = w.user_id\n      FROM wallets w\n      WHERE w.address = sabi.created_by;\n    `);\n\n    await queryRunner.query(`\n      UPDATE space_address_book_items sabi\n      SET last_updated_by_uid = w.user_id\n      FROM wallets w\n      WHERE w.address = sabi.last_updated_by;\n    `);\n\n    // Drop old varchar columns and rename new ones.\n    await queryRunner.query(`\n      ALTER TABLE space_address_book_items\n        DROP COLUMN created_by,\n        DROP COLUMN last_updated_by;\n    `);\n\n    await queryRunner.query(`\n      ALTER TABLE space_address_book_items\n        RENAME COLUMN created_by_uid TO created_by;\n    `);\n\n    await queryRunner.query(`\n      ALTER TABLE space_address_book_items\n        RENAME COLUMN last_updated_by_uid TO last_updated_by;\n    `);\n\n    // Set NOT NULL constraint on the new columns.\n    await queryRunner.query(`\n      ALTER TABLE space_address_book_items\n        ALTER COLUMN created_by SET NOT NULL,\n        ALTER COLUMN last_updated_by SET NOT NULL;\n    `);\n  }\n\n  public async down(queryRunner: QueryRunner): Promise<void> {\n    // Reverse is lossy: OIDC-created entries have no wallet to map back to,\n    // and users with multiple wallets pick one arbitrarily (LIMIT 1).\n    // Columns are intentionally left nullable (unlike the original NOT NULL)\n    // because OIDC-created entries will have NULL after rollback.\n    await queryRunner.query(`\n      ALTER TABLE space_address_book_items\n        ADD COLUMN created_by_addr varchar(42),\n        ADD COLUMN last_updated_by_addr varchar(42);\n    `);\n\n    // Best-effort backfill from user IDs to wallet addresses.\n    await queryRunner.query(`\n      UPDATE space_address_book_items sabi\n      SET created_by_addr = (\n        SELECT w.address FROM wallets w\n        WHERE w.user_id = sabi.created_by LIMIT 1\n      );\n    `);\n\n    await queryRunner.query(`\n      UPDATE space_address_book_items sabi\n      SET last_updated_by_addr = (\n        SELECT w.address FROM wallets w\n        WHERE w.user_id = sabi.last_updated_by LIMIT 1\n      );\n    `);\n\n    // Drop integer columns and rename varchar ones.\n    await queryRunner.query(`\n      ALTER TABLE space_address_book_items\n        DROP COLUMN created_by,\n        DROP COLUMN last_updated_by;\n    `);\n\n    await queryRunner.query(`\n      ALTER TABLE space_address_book_items\n        RENAME COLUMN created_by_addr TO created_by;\n    `);\n\n    await queryRunner.query(`\n      ALTER TABLE space_address_book_items\n        RENAME COLUMN last_updated_by_addr TO last_updated_by;\n    `);\n  }\n}\n",
+    "src/modules/spaces/datasources/entities/address-book-item.entity.db.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport { Space } from '@/modules/spaces/datasources/entities/space.entity.db';\nimport { NAME_MAX_LENGTH } from '@/domain/common/schemas/name.schema';\nimport { databaseAddressTransformer } from '@/domain/common/transformers/databaseAddress.transformer';\nimport { AddressBookDbItem as DomainAddressBookItem } from '@/modules/spaces/domain/address-books/entities/address-book-item.db.entity';\nimport {\n  Column,\n  Entity,\n  Index,\n  JoinColumn,\n  ManyToOne,\n  PrimaryGeneratedColumn,\n  Unique,\n} from 'typeorm';\nimport type { Address } from 'viem';\n\n@Entity('space_address_book_items')\n@Unique('UQ_SABI_space_id_address', ['space', 'address'])\n@Index('IDX_SABI_space_id', ['space'])\nexport class AddressBookItem implements DomainAddressBookItem {\n  @PrimaryGeneratedColumn({\n    primaryKeyConstraintName: 'PK_SABI_id',\n  })\n  id!: number;\n\n  @ManyToOne(() => Space, (space: Space) => space.id, {\n    onDelete: 'CASCADE',\n    nullable: false,\n  })\n  @JoinColumn({\n    name: 'space_id',\n    foreignKeyConstraintName: 'FK_SABI_space_id',\n  })\n  public readonly space!: Space;\n\n  @Column({\n    name: 'chain_ids',\n    type: 'varchar',\n    length: 32,\n    nullable: false,\n    array: true,\n  })\n  public readonly chainIds!: Array<string>;\n\n  @Column({\n    name: 'address',\n    type: 'varchar',\n    length: 42,\n    nullable: false,\n    transformer: databaseAddressTransformer,\n  })\n  address!: Address;\n\n  @Column({\n    type: 'varchar',\n    length: NAME_MAX_LENGTH,\n  })\n  name!: string;\n\n  @Column({\n    name: 'created_by',\n    type: 'integer',\n    nullable: false,\n  })\n  createdBy!: number;\n\n  @Column({\n    name: 'last_updated_by',\n    type: 'integer',\n    nullable: false,\n  })\n  lastUpdatedBy!: number;\n\n  @Column({\n    name: 'created_at',\n    type: 'timestamp with time zone',\n    default: () => 'CURRENT_TIMESTAMP',\n    update: false,\n  })\n  createdAt!: Date;\n\n  @Column({\n    name: 'updated_at',\n    type: 'timestamp with time zone',\n    default: () => 'CURRENT_TIMESTAMP',\n    update: false,\n  })\n  updatedAt!: Date;\n}\n",
+    "src/modules/spaces/domain/address-books/entities/address-book-item.db.entity.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport { RowSchema } from '@/datasources/db/v2/entities/row.entity';\nimport type { Space } from '@/modules/spaces/domain/entities/space.entity';\nimport { SpaceSchema } from '@/modules/spaces/domain/entities/space.entity';\nimport { AddressSchema } from '@/validation/entities/schemas/address.schema';\nimport { makeNameSchema } from '@/domain/common/schemas/name.schema';\nimport { z } from 'zod';\nimport { ADDRESS_BOOK_NAME_MAX_LENGTH } from '@/modules/spaces/domain/address-books/entities/address-book-item.entity';\nimport type { Address } from 'viem';\n\n// We need explicitly define ZodType due to recursion\nexport const AddressBookDbItemSchema: z.ZodType<\n  z.infer<typeof RowSchema> & {\n    space: Space;\n    chainIds: Array<string>;\n    address: Address;\n    name: string;\n    createdBy: number;\n    lastUpdatedBy: number;\n  }\n> = RowSchema.extend({\n  space: z.lazy(() => SpaceSchema),\n  chainIds: z.array(z.string()),\n  address: AddressSchema as z.ZodType<Address>,\n  name: makeNameSchema({ maxLength: ADDRESS_BOOK_NAME_MAX_LENGTH }),\n  createdBy: z.number().int(),\n  lastUpdatedBy: z.number().int(),\n});\n\nexport type AddressBookDbItem = z.infer<typeof AddressBookDbItemSchema>;\n",
+    "src/modules/spaces/routes/entities/space-address-book.dto.entity.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport type { AddressBookDbItem } from '@/modules/spaces/domain/address-books/entities/address-book-item.db.entity';\nimport { ApiProperty } from '@nestjs/swagger';\n\nexport class SpaceAddressBookItemDto {\n  @ApiProperty({ type: String })\n  public name!: AddressBookDbItem['name'];\n\n  @ApiProperty({ type: String })\n  public address!: AddressBookDbItem['address'];\n\n  @ApiProperty({ type: String, isArray: true })\n  public chainIds!: AddressBookDbItem['chainIds'];\n\n  @ApiProperty({ type: String, description: 'User ID of the creator' })\n  public createdBy!: string;\n\n  @ApiProperty({ type: String, description: 'User ID of the last updater' })\n  public lastUpdatedBy!: string;\n\n  @ApiProperty({ type: Date })\n  public createdAt!: AddressBookDbItem['createdAt'];\n\n  @ApiProperty({ type: Date })\n  public updatedAt!: AddressBookDbItem['updatedAt'];\n}\n\nexport class SpaceAddressBookDto {\n  @ApiProperty({ type: String })\n  public spaceId!: string;\n\n  @ApiProperty({ type: SpaceAddressBookItemDto, isArray: true })\n  public data!: Array<SpaceAddressBookItemDto>;\n}\n",
+    "src/modules/spaces/domain/address-books/address-book-items.repository.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport { IConfigurationService } from '@/config/configuration.service.interface';\nimport { PostgresDatabaseService } from '@/datasources/db/v2/postgres-database.service';\nimport { AddressBookItem as DbAddressBookItem } from '@/modules/spaces/datasources/entities/address-book-item.entity.db';\nimport { AuthPayload } from '@/modules/auth/domain/entities/auth-payload.entity';\nimport { IAddressBookItemsRepository } from '@/modules/spaces/domain/address-books/address-book-items.repository.interface';\nimport type { AddressBookDbItem } from '@/modules/spaces/domain/address-books/entities/address-book-item.db.entity';\nimport { AddressBookItem } from '@/modules/spaces/domain/address-books/entities/address-book-item.entity';\nimport { Space } from '@/modules/spaces/domain/entities/space.entity';\nimport { ISpacesRepository } from '@/modules/spaces/domain/spaces.repository.interface';\nimport { getAuthenticatedUserIdOrFail } from '@/modules/auth/utils/assert-authenticated.utils';\nimport { BadRequestException, Inject, Injectable } from '@nestjs/common';\nimport { EntityManager, In } from 'typeorm';\nimport { UpsertAddressBookItemsDto } from '@/modules/spaces/routes/entities/upsert-address-book-items.dto.entity';\nimport { MemberRole } from '@/modules/users/domain/entities/member.entity';\nimport { isAddressEqual } from 'viem';\n\n@Injectable()\nexport class AddressBookItemsRepository implements IAddressBookItemsRepository {\n  private readonly maxItems: number;\n\n  constructor(\n    private readonly db: PostgresDatabaseService,\n    @Inject(ISpacesRepository)\n    private readonly spacesRepository: ISpacesRepository,\n    @Inject(IConfigurationService)\n    private readonly configurationService: IConfigurationService,\n  ) {\n    this.maxItems = this.configurationService.getOrThrow<number>(\n      'spaces.addressBooks.maxItems',\n    );\n  }\n\n  public async findAllBySpaceId(args: {\n    authPayload: AuthPayload;\n    spaceId: Space['id'];\n  }): Promise<Array<AddressBookDbItem>> {\n    const space = await this.getSpaceAs({\n      ...args,\n      memberRoleIn: ['ADMIN', 'MEMBER'],\n    });\n    const repository = await this.db.getRepository(DbAddressBookItem);\n    return repository.findBy({ space: { id: space.id } });\n  }\n\n  public async upsertMany(args: {\n    authPayload: AuthPayload;\n    spaceId: Space['id'];\n    addressBookItems: UpsertAddressBookItemsDto['items'];\n  }): Promise<Array<AddressBookDbItem>> {\n    const userId = getAuthenticatedUserIdOrFail(args.authPayload);\n    const space = await this.getSpaceAs({\n      ...args,\n      memberRoleIn: ['ADMIN'],\n    });\n    const repository = await this.db.getRepository(DbAddressBookItem);\n    await this.db.transaction(async (entityManager) => {\n      const existingAddresses = await this.updateExistingAddressBookItems({\n        entityManager,\n        addressBookItems: args.addressBookItems,\n        space,\n        userId,\n      });\n\n      const newAddressBookItems = args.addressBookItems.filter(\n        (item) =>\n          !existingAddresses.some((existingItem) =>\n            isAddressEqual(existingItem, item.address),\n          ),\n      );\n\n      await this.createNewAddressBookItems({\n        entityManager,\n        addressBookItems: newAddressBookItems,\n        space,\n        userId,\n      });\n    });\n    return repository.findBy({ space: { id: space.id } });\n  }\n\n  public async deleteByAddress(args: {\n    authPayload: AuthPayload;\n    spaceId: Space['id'];\n    address: AddressBookDbItem['address'];\n  }): Promise<void> {\n    const space = await this.getSpaceAs({\n      ...args,\n      memberRoleIn: ['ADMIN'],\n    });\n    const repository = await this.db.getRepository(DbAddressBookItem);\n\n    await repository.delete({\n      address: args.address,\n      space: { id: space.id },\n    });\n  }\n\n  private async getSpaceAs(args: {\n    authPayload: AuthPayload;\n    spaceId: Space['id'];\n    memberRoleIn: Array<keyof typeof MemberRole>;\n  }): Promise<Space> {\n    const userId = getAuthenticatedUserIdOrFail(args.authPayload);\n\n    return this.spacesRepository.findOneOrFail({\n      where: {\n        id: args.spaceId,\n        members: {\n          status: In(['ACTIVE', 'INVITED']),\n          role: In(args.memberRoleIn),\n          user: { id: userId },\n        },\n      },\n    });\n  }\n\n  private async updateExistingAddressBookItems(args: {\n    userId: number;\n    addressBookItems: Array<AddressBookItem>;\n    space: Space;\n    entityManager: EntityManager;\n  }): Promise<Array<DbAddressBookItem['address']>> {\n    const repository = args.entityManager.getRepository(DbAddressBookItem);\n    const existingAddressBookItems = await repository.findBy({\n      space: { id: args.space.id },\n      address: In(args.addressBookItems.map((item) => item.address)),\n    });\n    for (const item of existingAddressBookItems) {\n      const patch = args.addressBookItems.find((addressBookItem) =>\n        isAddressEqual(addressBookItem.address, item.address),\n      );\n      if (!patch) {\n        continue;\n      }\n      await repository.update(item.id, {\n        name: patch.name,\n        chainIds: patch.chainIds,\n        lastUpdatedBy: args.userId,\n      });\n    }\n    return existingAddressBookItems.map((item) => item.address);\n  }\n\n  private async createNewAddressBookItems(args: {\n    userId: number;\n    addressBookItems: Array<AddressBookItem>;\n    space: Space;\n    entityManager: EntityManager;\n  }): Promise<Array<DbAddressBookItem['id']>> {\n    await this.checkItemsLimit(args);\n    const repository = args.entityManager.getRepository(DbAddressBookItem);\n    const insertedIds = await repository.insert(\n      args.addressBookItems.map((addressBookItem) => ({\n        space: args.space,\n        address: addressBookItem.address,\n        name: addressBookItem.name,\n        chainIds: addressBookItem.chainIds,\n        createdBy: args.userId,\n        lastUpdatedBy: args.userId,\n      })),\n    );\n    return insertedIds.identifiers.map((i) => i.id);\n  }\n\n  private async checkItemsLimit(args: {\n    space: Space;\n    addressBookItems: Array<AddressBookItem>;\n    entityManager: EntityManager;\n  }): Promise<void> {\n    const repository = args.entityManager.getRepository(DbAddressBookItem);\n    const existingAddressBookItems = await repository.count({\n      where: { space: { id: args.space.id } },\n    });\n    const totalAddressBookItemsCount =\n      existingAddressBookItems + args.addressBookItems.length;\n    if (totalAddressBookItemsCount > this.maxItems) {\n      throw new BadRequestException(\n        `This Space only allows a maximum of ${this.maxItems} Address Book Items. You can only add up to ${this.maxItems - existingAddressBookItems} more.`,\n      );\n    }\n  }\n}\n",
+    "src/modules/spaces/domain/address-books/entities/__tests__/address-book-item.db.builder.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport type { IBuilder } from '@/__tests__/builder';\nimport { Builder } from '@/__tests__/builder';\nimport type { AddressBookItem } from '@/modules/spaces/datasources/entities/address-book-item.entity.db';\nimport { DB_MAX_SAFE_INTEGER } from '@/domain/common/constants';\nimport { nameBuilder } from '@/domain/common/entities/name.builder';\nimport { spaceBuilder } from '@/modules/spaces/domain/entities/__tests__/space.entity.db.builder';\nimport { faker } from '@faker-js/faker/.';\nimport { getAddress } from 'viem';\n\nexport function addressBookItemBuilder(): IBuilder<AddressBookItem> {\n  return new Builder<AddressBookItem>()\n    .with('id', faker.number.int({ min: 1, max: DB_MAX_SAFE_INTEGER }))\n    .with('space', spaceBuilder().build())\n    .with(\n      'chainIds',\n      faker.helpers.multiple(() => faker.string.numeric(), {\n        count: { min: 1, max: 5 },\n      }),\n    )\n    .with('address', getAddress(faker.finance.ethereumAddress()))\n    .with('name', nameBuilder())\n    .with('createdBy', faker.number.int({ min: 1, max: DB_MAX_SAFE_INTEGER }))\n    .with(\n      'lastUpdatedBy',\n      faker.number.int({ min: 1, max: DB_MAX_SAFE_INTEGER }),\n    );\n}\n",
+    "src/modules/spaces/domain/address-books/address-book-items.repository.integration.spec.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport type { IConfigurationService } from '@/config/configuration.service.interface';\nimport configuration from '@/config/entities/__tests__/configuration';\nimport { postgresConfig } from '@/config/entities/postgres.config';\nimport { DatabaseMigrator } from '@/datasources/db/v2/database-migrator.service';\nimport { PostgresDatabaseService } from '@/datasources/db/v2/postgres-database.service';\nimport { AddressBookItem } from '@/modules/spaces/datasources/entities/address-book-item.entity.db';\nimport { SpaceSafe } from '@/modules/spaces/datasources/entities/space-safes.entity.db';\nimport { Space } from '@/modules/spaces/datasources/entities/space.entity.db';\nimport { Member } from '@/modules/users/datasources/entities/member.entity.db';\nimport { User } from '@/modules/users/datasources/entities/users.entity.db';\nimport { Wallet } from '@/modules/wallets/datasources/entities/wallets.entity.db';\nimport {\n  siweAuthPayloadDtoBuilder,\n  oidcAuthPayloadDtoBuilder,\n} from '@/modules/auth/domain/entities/__tests__/auth-payload-dto.entity.builder';\nimport { AuthPayload } from '@/modules/auth/domain/entities/auth-payload.entity';\nimport { DB_MAX_SAFE_INTEGER } from '@/domain/common/constants';\nimport { nameBuilder } from '@/domain/common/entities/name.builder';\nimport { AddressBookItemsRepository } from '@/modules/spaces/domain/address-books/address-book-items.repository';\nimport type { IAddressBookItemsRepository } from '@/modules/spaces/domain/address-books/address-book-items.repository.interface';\nimport { addressBookItemBuilder } from '@/modules/spaces/domain/address-books/entities/__tests__/address-book-item.db.builder';\nimport { spaceBuilder } from '@/modules/spaces/domain/entities/__tests__/space.entity.db.builder';\nimport { SpacesRepository } from '@/modules/spaces/domain/spaces.repository';\nimport type { ILoggingService } from '@/logging/logging.interface';\nimport { faker } from '@faker-js/faker/.';\nimport { BadRequestException, NotFoundException } from '@nestjs/common';\nimport type { ConfigService } from '@nestjs/config';\nimport { range } from 'lodash';\nimport { DataSource } from 'typeorm';\nimport { getAddress } from 'viem';\n\nconst mockLoggingService = {\n  debug: jest.fn(),\n  error: jest.fn(),\n  info: jest.fn(),\n  warn: jest.fn(),\n} as jest.MockedObjectDeep<ILoggingService>;\n\nconst mockConfigurationService = jest.mocked({\n  getOrThrow: jest.fn(),\n} as jest.MockedObjectDeep<IConfigurationService>);\n\ndescribe('AddressBookItemsRepository', () => {\n  let dbService: PostgresDatabaseService;\n  let addressBookItemsRepository: IAddressBookItemsRepository;\n\n  const testDatabaseName = faker.string.alpha({\n    length: 10,\n    casing: 'lower',\n  });\n  const testConfiguration = configuration();\n\n  const dataSource = new DataSource({\n    ...postgresConfig({\n      ...testConfiguration.db.connection.postgres,\n      type: 'postgres',\n      database: testDatabaseName,\n    }),\n    migrationsTableName: testConfiguration.db.orm.migrationsTableName,\n    entities: [Member, Space, SpaceSafe, User, Wallet, AddressBookItem],\n  });\n\n  const dbWalletRepo = dataSource.getRepository(Wallet);\n  const dbUserRepo = dataSource.getRepository(User);\n  const dbSpacesRepository = dataSource.getRepository(Space);\n  const dbMembersRepository = dataSource.getRepository(Member);\n  const dbAddressBookItemsRepository =\n    dataSource.getRepository(AddressBookItem);\n\n  beforeAll(async () => {\n    // Create database\n    const testDataSource = new DataSource({\n      ...postgresConfig({\n        ...testConfiguration.db.connection.postgres,\n        type: 'postgres',\n        database: 'postgres',\n      }),\n    });\n\n    const testDbService = new PostgresDatabaseService(\n      mockLoggingService,\n      testDataSource,\n    );\n    await testDbService.initializeDatabaseConnection();\n    await testDbService\n      .getDataSource()\n      .query(`CREATE DATABASE ${testDatabaseName}`);\n    await testDbService.destroyDatabaseConnection();\n\n    // Create database connection\n    dbService = new PostgresDatabaseService(mockLoggingService, dataSource);\n    await dbService.initializeDatabaseConnection();\n\n    // Migrate database\n    const mockConfigService = {\n      getOrThrow: jest.fn().mockImplementation((key: string) => {\n        if (key === 'db.migrator.numberOfRetries') {\n          return testConfiguration.db.migrator.numberOfRetries;\n        }\n        if (key === 'db.migrator.retryAfterMs') {\n          return testConfiguration.db.migrator.retryAfterMs;\n        }\n        if (key === 'spaces.addressBooks.maxItems') {\n          return testConfiguration.spaces.addressBooks.maxItems;\n        }\n      }),\n    } as jest.MockedObjectDeep<ConfigService>;\n    const migrator = new DatabaseMigrator(\n      mockLoggingService,\n      dbService,\n      mockConfigService,\n    );\n    await migrator.migrate();\n\n    mockConfigurationService.getOrThrow.mockImplementation((key) => {\n      if (key === 'spaces.maxSpaceCreationsPerUser') {\n        return testConfiguration.spaces.maxSpaceCreationsPerUser;\n      }\n    });\n\n    addressBookItemsRepository = new AddressBookItemsRepository(\n      dbService,\n      new SpacesRepository(dbService, mockConfigurationService),\n      mockConfigService,\n    );\n  });\n\n  afterEach(() => {\n    jest.resetAllMocks();\n  });\n\n  afterAll(async () => {\n    await dbService.getDataSource().dropDatabase();\n    await dbService.destroyDatabaseConnection();\n  });\n\n  describe('findAllBySpaceId', () => {\n    it('should return an empty array if no address book items exist for the given Space ID', async () => {\n      const { spaceId, authPayload } = await createSpaceAsAdmin();\n      const result = await addressBookItemsRepository.findAllBySpaceId({\n        authPayload,\n        spaceId,\n      });\n      expect(result).toEqual([]);\n    });\n\n    it('should return an array of address book items for the given Space ID', async () => {\n      const { spaceId, authPayload } = await createSpaceAsAdmin();\n      const items = range(1, 5).map(() => ({\n        chainIds: range(2, 5).map(() => faker.string.numeric()),\n        address: getAddress(faker.finance.ethereumAddress()),\n        name: nameBuilder(),\n        space: { id: spaceId },\n        createdBy: faker.number.int({ min: 1, max: DB_MAX_SAFE_INTEGER }),\n        lastUpdatedBy: faker.number.int({ min: 1, max: DB_MAX_SAFE_INTEGER }),\n      }));\n      await Promise.all(\n        items.map((item) => dbAddressBookItemsRepository.insert(item)),\n      );\n\n      const result = await addressBookItemsRepository.findAllBySpaceId({\n        authPayload,\n        spaceId,\n      });\n\n      expect(result).toHaveLength(items.length);\n      expect(result).toEqual(\n        expect.arrayContaining(\n          items.map((item) =>\n            expect.objectContaining({\n              chainIds: item.chainIds,\n              address: item.address,\n              name: item.name,\n              createdBy: item.createdBy,\n              lastUpdatedBy: item.lastUpdatedBy,\n            }),\n          ),\n        ),\n      );\n    });\n\n    it('should return an array of address book items for the given Space ID for a Space Member', async () => {\n      const { spaceId } = await createSpaceAsAdmin();\n      const authPayload = await addMemberToSpaceWithStatus(spaceId, 'ACTIVE');\n      const items = range(1, 5).map(() => ({\n        chainIds: range(2, 5).map(() => faker.string.numeric()),\n        address: getAddress(faker.finance.ethereumAddress()),\n        name: nameBuilder(),\n        space: { id: spaceId },\n        createdBy: faker.number.int({ min: 1, max: DB_MAX_SAFE_INTEGER }),\n        lastUpdatedBy: faker.number.int({ min: 1, max: DB_MAX_SAFE_INTEGER }),\n      }));\n      await Promise.all(\n        items.map((item) => dbAddressBookItemsRepository.insert(item)),\n      );\n\n      const result = await addressBookItemsRepository.findAllBySpaceId({\n        authPayload,\n        spaceId,\n      });\n\n      expect(result).toHaveLength(items.length);\n      expect(result).toEqual(\n        expect.arrayContaining(\n          items.map((item) =>\n            expect.objectContaining({\n              chainIds: item.chainIds,\n              address: item.address,\n              name: item.name,\n              createdBy: item.createdBy,\n              lastUpdatedBy: item.lastUpdatedBy,\n            }),\n          ),\n        ),\n      );\n    });\n\n    it('should return a NotFoundException if the space does not exist', async () => {\n      const { authPayload } = await createUser();\n      await expect(\n        addressBookItemsRepository.findAllBySpaceId({\n          authPayload,\n          spaceId: faker.number.int({ min: 1, max: DB_MAX_SAFE_INTEGER }),\n        }),\n      ).rejects.toThrow(new NotFoundException('Space not found.'));\n    });\n\n    it('should throw a NotFoundException if the user is not a member', async () => {\n      const { spaceId } = await createSpaceAsAdmin();\n      const { authPayload } = await createUser();\n      await expect(\n        addressBookItemsRepository.findAllBySpaceId({\n          authPayload,\n          spaceId,\n        }),\n      ).rejects.toThrow(new NotFoundException('Space not found.'));\n    });\n\n    it('should throw a NotFoundException if the user declined the membership', async () => {\n      const { spaceId } = await createSpaceAsAdmin();\n      const authPayload = await addMemberToSpaceWithStatus(spaceId, 'DECLINED');\n      await expect(\n        addressBookItemsRepository.findAllBySpaceId({\n          authPayload,\n          spaceId,\n        }),\n      ).rejects.toThrow(new NotFoundException('Space not found.'));\n    });\n  });\n\n  describe('upsertMany', () => {\n    it('should insert new Address Book Items and update existing ones', async () => {\n      const { spaceId, authPayload } = await createSpaceAsAdmin();\n      const firstAdminUserId = Number(authPayload.sub);\n      const existingAddressBookItems = faker.helpers.multiple(\n        () =>\n          addressBookItemBuilder()\n            .with('space', spaceBuilder().with('id', spaceId).build())\n            .with('createdBy', firstAdminUserId)\n            .with('lastUpdatedBy', firstAdminUserId)\n            .build(),\n        { count: { min: 2, max: 5 } },\n      );\n      const newAddressBookItems = faker.helpers.multiple(\n        () =>\n          addressBookItemBuilder()\n            .with('space', spaceBuilder().with('id', spaceId).build())\n            .build(),\n        { count: { min: 2, max: 5 } },\n      );\n      await dbAddressBookItemsRepository.insert(existingAddressBookItems);\n      const newAdminAuthPayload = await addAdminToSpace(spaceId);\n      const secondAdminUserId = Number(newAdminAuthPayload.sub);\n      const newName = nameBuilder();\n      const newChainIds = range(2, 5).map(() => faker.string.numeric());\n      const modifiedAddressBookItems = existingAddressBookItems.map((item) => ({\n        ...item,\n        name: newName,\n        chainIds: newChainIds,\n      }));\n\n      const actual = await addressBookItemsRepository.upsertMany({\n        authPayload: newAdminAuthPayload,\n        spaceId,\n        addressBookItems: modifiedAddressBookItems.concat(newAddressBookItems),\n      });\n\n      expect(actual).toHaveLength(\n        existingAddressBookItems.length + newAddressBookItems.length,\n      );\n      expect(actual).toEqual(\n        expect.arrayContaining(\n          modifiedAddressBookItems.map((item) =>\n            expect.objectContaining({\n              name: newName, // modified name\n              chainIds: newChainIds, // modified chainIds\n              address: item.address, // address remains the same\n              createdBy: firstAdminUserId, // created by the first admin who created the Space\n              lastUpdatedBy: secondAdminUserId, // modified by the second admin\n            }),\n          ),\n        ),\n      );\n      expect(actual).toEqual(\n        expect.arrayContaining(\n          newAddressBookItems.map((item) =>\n            expect.objectContaining({\n              name: item.name, // name remains the same\n              chainIds: item.chainIds, // chainIds remains the same\n              address: item.address, // address remains the same\n              createdBy: secondAdminUserId, // created by the second admin\n              lastUpdatedBy: secondAdminUserId, // modified by the second admin\n            }),\n          ),\n        ),\n      );\n    });\n\n    it('should throw BadRequestException if the amount of items in the Space surpasses the limit', async () => {\n      const { spaceId, authPayload } = await createSpaceAsAdmin();\n      const limit = testConfiguration.spaces.addressBooks.maxItems;\n      const userId = Number(authPayload.sub);\n      const existingAddressBookItems = faker.helpers.multiple(\n        () =>\n          addressBookItemBuilder()\n            .with('space', spaceBuilder().with('id', spaceId).build())\n            .with('createdBy', userId)\n            .with('lastUpdatedBy', userId)\n            .build(),\n        {\n          count: limit - 1,\n        },\n      );\n      await dbAddressBookItemsRepository.insert(existingAddressBookItems);\n      const newAddressBookItems = faker.helpers.multiple(\n        () =>\n          addressBookItemBuilder()\n            .with('space', spaceBuilder().with('id', spaceId).build())\n            .build(),\n        { count: 2 },\n      );\n\n      await expect(\n        addressBookItemsRepository.upsertMany({\n          authPayload: authPayload,\n          spaceId,\n          addressBookItems: newAddressBookItems,\n        }),\n      ).rejects.toThrow(\n        new BadRequestException(\n          `This Space only allows a maximum of ${limit} Address Book Items. You can only add up to 1 more.`,\n        ),\n      );\n    });\n\n    it('should return a NotFoundException if the space does not exist', async () => {\n      const { authPayload } = await createUser();\n      const addressBookItems = faker.helpers.multiple(() =>\n        addressBookItemBuilder().build(),\n      );\n      await expect(\n        addressBookItemsRepository.upsertMany({\n          authPayload,\n          spaceId: faker.number.int({ min: 1, max: DB_MAX_SAFE_INTEGER }),\n          addressBookItems,\n        }),\n      ).rejects.toThrow(new NotFoundException('Space not found.'));\n    });\n\n    it('should throw NotFoundException if the user is not an admin', async () => {\n      const { spaceId } = await createSpaceAsAdmin();\n      const authPayload = await addMemberToSpaceWithStatus(spaceId, 'ACTIVE');\n      const addressBookItems = faker.helpers.multiple(() =>\n        addressBookItemBuilder().build(),\n      );\n      await expect(\n        addressBookItemsRepository.upsertMany({\n          authPayload,\n          spaceId,\n          addressBookItems,\n        }),\n      ).rejects.toThrow(new NotFoundException('Space not found.'));\n    });\n\n    it('should upsert items for an OIDC admin', async () => {\n      const { spaceId, authPayload } = await createSpaceAsOidcAdmin();\n      const userId = Number(authPayload.sub);\n      const newItems = faker.helpers.multiple(\n        () => addressBookItemBuilder().build(),\n        { count: { min: 1, max: 3 } },\n      );\n\n      const actual = await addressBookItemsRepository.upsertMany({\n        authPayload,\n        spaceId,\n        addressBookItems: newItems,\n      });\n\n      expect(actual).toHaveLength(newItems.length);\n      expect(actual).toEqual(\n        expect.arrayContaining(\n          newItems.map((item) =>\n            expect.objectContaining({\n              address: item.address,\n              name: item.name,\n              createdBy: userId,\n              lastUpdatedBy: userId,\n            }),\n          ),\n        ),\n      );\n    });\n  });\n\n  describe('deleteByAddress', () => {\n    it('should delete an address book item by address', async () => {\n      const { spaceId, authPayload } = await createSpaceAsAdmin();\n      const userId = Number(authPayload.sub);\n      const addressBookItem = addressBookItemBuilder()\n        .with('space', spaceBuilder().with('id', spaceId).build())\n        .with('createdBy', userId)\n        .with('lastUpdatedBy', userId)\n        .build();\n      await dbAddressBookItemsRepository.insert(addressBookItem);\n\n      await addressBookItemsRepository.deleteByAddress({\n        authPayload,\n        spaceId,\n        address: addressBookItem.address,\n      });\n\n      await expect(\n        dbAddressBookItemsRepository.findOneBy({\n          address: addressBookItem.address,\n        }),\n      ).resolves.toBe(null);\n    });\n\n    it('should not delete the same address from a different Space', async () => {\n      const { spaceId: spaceId1, authPayload: authPayload1 } =\n        await createSpaceAsAdmin();\n      const { spaceId: spaceId2, authPayload: authPayload2 } =\n        await createSpaceAsAdmin();\n      const userId1 = Number(authPayload1.sub);\n      const userId2 = Number(authPayload2.sub);\n      const address = getAddress(faker.finance.ethereumAddress());\n      const addressBookItem1 = addressBookItemBuilder()\n        .with('address', address)\n        .with('space', spaceBuilder().with('id', spaceId1).build())\n        .with('createdBy', userId1)\n        .with('lastUpdatedBy', userId1)\n        .build();\n      const addressBookItem2 = addressBookItemBuilder()\n        .with('address', address)\n        .with('space', spaceBuilder().with('id', spaceId2).build())\n        .with('createdBy', userId2)\n        .with('lastUpdatedBy', userId2)\n        .build();\n      await dbAddressBookItemsRepository.insert(addressBookItem1);\n      await dbAddressBookItemsRepository.insert(addressBookItem2);\n\n      await addressBookItemsRepository.deleteByAddress({\n        authPayload: authPayload1,\n        spaceId: spaceId1,\n        address: addressBookItem1.address,\n      });\n\n      await expect(\n        dbAddressBookItemsRepository.findOneBy({\n          address: addressBookItem1.address,\n          space: { id: spaceId2 },\n        }),\n      ).resolves.toStrictEqual(\n        expect.objectContaining({\n          id: expect.any(Number),\n          address: addressBookItem1.address,\n          name: addressBookItem2.name,\n          chainIds: addressBookItem2.chainIds,\n          createdBy: addressBookItem2.createdBy,\n          lastUpdatedBy: addressBookItem2.lastUpdatedBy,\n          createdAt: expect.any(Date),\n          updatedAt: expect.any(Date),\n        }),\n      );\n    });\n\n    it('should throw a NotFoundException if the space does not exist', async () => {\n      const { authPayload } = await createUser();\n      const addressBookItem = addressBookItemBuilder().build();\n\n      await expect(\n        addressBookItemsRepository.deleteByAddress({\n          authPayload,\n          spaceId: faker.number.int({ min: 1, max: DB_MAX_SAFE_INTEGER }),\n          address: addressBookItem.address,\n        }),\n      ).rejects.toThrow(new NotFoundException('Space not found.'));\n    });\n\n    it('should throw NotFoundException if the user is not an ADMIN', async () => {\n      const { spaceId } = await createSpaceAsAdmin();\n      const authPayload = await addMemberToSpaceWithStatus(spaceId, 'ACTIVE');\n      const addressBookItem = addressBookItemBuilder().build();\n\n      await expect(\n        addressBookItemsRepository.deleteByAddress({\n          authPayload,\n          spaceId,\n          address: addressBookItem.address,\n        }),\n      ).rejects.toThrow(new NotFoundException('Space not found.'));\n    });\n\n    it('should delete an address book item as an OIDC admin', async () => {\n      const { spaceId, authPayload } = await createSpaceAsOidcAdmin();\n      const userId = Number(authPayload.sub);\n      const addressBookItem = addressBookItemBuilder()\n        .with('space', spaceBuilder().with('id', spaceId).build())\n        .with('createdBy', userId)\n        .with('lastUpdatedBy', userId)\n        .build();\n      await dbAddressBookItemsRepository.insert(addressBookItem);\n\n      await addressBookItemsRepository.deleteByAddress({\n        authPayload,\n        spaceId,\n        address: addressBookItem.address,\n      });\n\n      await expect(\n        dbAddressBookItemsRepository.findOneBy({\n          address: addressBookItem.address,\n        }),\n      ).resolves.toBe(null);\n    });\n  });\n\n  // Utility functions\n\n  const createSpaceAsAdmin = async (): Promise<{\n    spaceId: Space['id'];\n    authPayload: AuthPayload;\n  }> => {\n    const { user, authPayload } = await createUser();\n    const space = await dbSpacesRepository.insert({\n      name: nameBuilder(),\n      status: 'ACTIVE',\n    });\n    await dbMembersRepository.insert({\n      user,\n      space: space.generatedMaps[0],\n      name: nameBuilder(),\n      status: 'ACTIVE',\n      role: 'ADMIN',\n      invitedBy: getAddress(faker.finance.ethereumAddress()),\n    });\n    return { spaceId: space.generatedMaps[0].id, authPayload: authPayload };\n  };\n\n  const addAdminToSpace = async (\n    spaceId: Space['id'],\n  ): Promise<AuthPayload> => {\n    const { user, authPayload } = await createUser();\n    const space = await dbSpacesRepository.findOneBy({ id: spaceId });\n    if (!space) throw new NotFoundException('Space not found.');\n    await dbMembersRepository.insert({\n      user,\n      space,\n      name: nameBuilder(),\n      status: 'ACTIVE',\n      role: 'ADMIN',\n      invitedBy: getAddress(faker.finance.ethereumAddress()),\n    });\n    return authPayload;\n  };\n\n  const addMemberToSpaceWithStatus = async (\n    spaceId: Space['id'],\n    memberStatus: 'ACTIVE' | 'INVITED' | 'DECLINED',\n  ): Promise<AuthPayload> => {\n    const { user, authPayload } = await createUser();\n    const space = await dbSpacesRepository.findOneBy({ id: spaceId });\n    if (!space) throw new NotFoundException('Space not found.');\n    await dbMembersRepository.insert({\n      user,\n      space,\n      name: nameBuilder(),\n      status: memberStatus,\n      role: 'MEMBER',\n      invitedBy: getAddress(faker.finance.ethereumAddress()),\n    });\n    return authPayload;\n  };\n\n  const createUser = async (): Promise<{\n    user: User;\n    authPayload: AuthPayload;\n  }> => {\n    const user = await dbUserRepo.insert({\n      status: 'ACTIVE',\n    });\n    const authPayloadDto = siweAuthPayloadDtoBuilder()\n      .with('sub', (user.generatedMaps[0].id as number).toString())\n      .build();\n    const authPayload = new AuthPayload(authPayloadDto);\n    await dbWalletRepo.insert({\n      user: user.generatedMaps[0],\n      address: authPayload.signer_address,\n    });\n    return { user: user.raw[0], authPayload };\n  };\n\n  const createOidcUser = async (): Promise<{\n    user: User;\n    authPayload: AuthPayload;\n  }> => {\n    const user = await dbUserRepo.insert({\n      status: 'ACTIVE',\n    });\n    const authPayloadDto = oidcAuthPayloadDtoBuilder()\n      .with('sub', (user.generatedMaps[0].id as number).toString())\n      .build();\n    return {\n      user: user.raw[0],\n      authPayload: new AuthPayload(authPayloadDto),\n    };\n  };\n\n  const createSpaceAsOidcAdmin = async (): Promise<{\n    spaceId: Space['id'];\n    authPayload: AuthPayload;\n  }> => {\n    const { user, authPayload } = await createOidcUser();\n    const space = await dbSpacesRepository.insert({\n      name: nameBuilder(),\n      status: 'ACTIVE',\n    });\n    await dbMembersRepository.insert({\n      user,\n      space: space.generatedMaps[0],\n      name: nameBuilder(),\n      status: 'ACTIVE',\n      role: 'ADMIN',\n      invitedBy: getAddress(faker.finance.ethereumAddress()),\n    });\n    return { spaceId: space.generatedMaps[0].id, authPayload };\n  };\n});\n"
+  },
+  "has_audio": true,
+  "has_video": true,
+  "has_thumbnail": true,
+  "audio_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-client-gateway/pr-3056/2fa1fbad238d/audio.mp3",
+  "audio_manifest": {
+    "file": "audio.mp3",
+    "total_ms": 407269,
+    "silence_ms": 400,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "adapter": "elevenlabs",
+    "model": "eleven_turbo_v2_5",
+    "intro": {
+      "narration": "Grab some popcorn and let's dive in. Here's the pitch: This PR migrates `space_address_book_items.created_by` and `last_updated_by` columns from `varchar(42)` wallet addresses to `integer` user IDs, unblocking OIDC-authenticated users from writing address book entries.",
+      "narration_ms": 17229,
+      "gap_ms": 500,
+      "duration_ms": 17729
+    },
+    "steps": [
+      {
+        "step": 1,
+        "start_ms": 17729,
+        "end_ms": 43410
+      },
+      {
+        "step": 2,
+        "start_ms": 43810,
+        "end_ms": 60528
+      },
+      {
+        "step": 3,
+        "start_ms": 60928,
+        "end_ms": 78389
+      },
+      {
+        "step": 4,
+        "start_ms": 78789,
+        "end_ms": 99873
+      },
+      {
+        "step": 5,
+        "start_ms": 100273,
+        "end_ms": 120242
+      },
+      {
+        "step": 6,
+        "start_ms": 120642,
+        "end_ms": 139357
+      },
+      {
+        "step": 7,
+        "start_ms": 139757,
+        "end_ms": 159076
+      },
+      {
+        "step": 8,
+        "start_ms": 159476,
+        "end_ms": 178656
+      },
+      {
+        "step": 9,
+        "start_ms": 179056,
+        "end_ms": 198003
+      },
+      {
+        "step": 10,
+        "start_ms": 198403,
+        "end_ms": 224549
+      },
+      {
+        "step": 11,
+        "start_ms": 224949,
+        "end_ms": 244082
+      },
+      {
+        "step": 12,
+        "start_ms": 244482,
+        "end_ms": 265798
+      },
+      {
+        "step": 13,
+        "start_ms": 266198,
+        "end_ms": 286539
+      },
+      {
+        "step": 14,
+        "start_ms": 286939,
+        "end_ms": 305701
+      },
+      {
+        "step": 15,
+        "start_ms": 306101,
+        "end_ms": 325792
+      },
+      {
+        "step": 16,
+        "start_ms": 326192,
+        "end_ms": 345000
+      },
+      {
+        "step": 17,
+        "start_ms": 345400,
+        "end_ms": 363465
+      },
+      {
+        "step": 18,
+        "start_ms": 363865,
+        "end_ms": 383556
+      },
+      {
+        "step": 19,
+        "start_ms": 383956,
+        "end_ms": 407269
+      }
+    ],
+    "chapters": [
+      {
+        "title": "Why this change",
+        "start_ms": 17729,
+        "end_ms": 60528,
+        "step_range": [
+          1,
+          2
+        ]
+      },
+      {
+        "title": "The database migration",
+        "start_ms": 60928,
+        "end_ms": 159076,
+        "step_range": [
+          3,
+          7
+        ]
+      },
+      {
+        "title": "Entity and schema updates",
+        "start_ms": 159476,
+        "end_ms": 224549,
+        "step_range": [
+          8,
+          10
+        ]
+      },
+      {
+        "title": "Service and repository rewiring",
+        "start_ms": 224949,
+        "end_ms": 305701,
+        "step_range": [
+          11,
+          14
+        ]
+      },
+      {
+        "title": "What can go wrong",
+        "start_ms": 306101,
+        "end_ms": 383556,
+        "step_range": [
+          15,
+          18
+        ]
+      },
+      {
+        "title": "Closing the loop",
+        "start_ms": 383956,
+        "end_ms": 407269,
+        "step_range": [
+          19,
+          19
+        ]
+      }
+    ],
+    "generated_at": 1777046339340
+  },
+  "audio_manifest_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-client-gateway/pr-3056/2fa1fbad238d/audio.json",
+  "video_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-client-gateway/pr-3056/2fa1fbad238d/video-github.mp4",
+  "thumbnail_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-client-gateway/pr-3056/2fa1fbad238d/thumbnail.png",
+  "pr_url": "https://github.com/safe-global/safe-client-gateway/pull/3056",
+  "is_sample": false,
+  "sample_id": null
+}
