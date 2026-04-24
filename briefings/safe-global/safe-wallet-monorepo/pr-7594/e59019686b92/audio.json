@@ -1,0 +1,173 @@
+{
+  "file": "audio.mp3",
+  "total_ms": 372328,
+  "silence_ms": 400,
+  "voice": "nPczCjzI2devNBz1zQrb",
+  "adapter": "elevenlabs",
+  "model": "eleven_turbo_v2_5",
+  "intro": {
+    "narration": "Grab some popcorn and let's dive in. Here's the pitch: This PR makes the CGW backend the authoritative source of truth for counterfactual (undeployed) safes, replacing the previous fire-and-forget Redux/localStorage approach.",
+    "narration_ms": 14954,
+    "gap_ms": 500,
+    "duration_ms": 15454
+  },
+  "steps": [
+    {
+      "step": 1,
+      "start_ms": 15454,
+      "end_ms": 40253
+    },
+    {
+      "step": 2,
+      "start_ms": 40653,
+      "end_ms": 52727
+    },
+    {
+      "step": 3,
+      "start_ms": 53127,
+      "end_ms": 73468
+    },
+    {
+      "step": 4,
+      "start_ms": 73868,
+      "end_ms": 94441
+    },
+    {
+      "step": 5,
+      "start_ms": 94841,
+      "end_ms": 111281
+    },
+    {
+      "step": 6,
+      "start_ms": 111681,
+      "end_ms": 130907
+    },
+    {
+      "step": 7,
+      "start_ms": 131307,
+      "end_ms": 150951
+    },
+    {
+      "step": 8,
+      "start_ms": 151351,
+      "end_ms": 171227
+    },
+    {
+      "step": 9,
+      "start_ms": 171627,
+      "end_ms": 184166
+    },
+    {
+      "step": 10,
+      "start_ms": 184566,
+      "end_ms": 199241
+    },
+    {
+      "step": 11,
+      "start_ms": 199641,
+      "end_ms": 215291
+    },
+    {
+      "step": 12,
+      "start_ms": 215691,
+      "end_ms": 233710
+    },
+    {
+      "step": 13,
+      "start_ms": 234110,
+      "end_ms": 248831
+    },
+    {
+      "step": 14,
+      "start_ms": 249231,
+      "end_ms": 264835
+    },
+    {
+      "step": 15,
+      "start_ms": 265235,
+      "end_ms": 280374
+    },
+    {
+      "step": 16,
+      "start_ms": 280774,
+      "end_ms": 298514
+    },
+    {
+      "step": 17,
+      "start_ms": 298914,
+      "end_ms": 316004
+    },
+    {
+      "step": 18,
+      "start_ms": 316404,
+      "end_ms": 333169
+    },
+    {
+      "step": 19,
+      "start_ms": 333569,
+      "end_ms": 355999
+    },
+    {
+      "step": 20,
+      "start_ms": 356399,
+      "end_ms": 372328
+    }
+  ],
+  "chapters": [
+    {
+      "title": "Why this change",
+      "start_ms": 15454,
+      "end_ms": 52727,
+      "step_range": [
+        1,
+        2
+      ]
+    },
+    {
+      "title": "The new creation flow",
+      "start_ms": 53127,
+      "end_ms": 150951,
+      "step_range": [
+        3,
+        7
+      ]
+    },
+    {
+      "title": "Eager sync and the loading gate",
+      "start_ms": 151351,
+      "end_ms": 233710,
+      "step_range": [
+        8,
+        12
+      ]
+    },
+    {
+      "title": "Consumers that had to adapt",
+      "start_ms": 234110,
+      "end_ms": 298514,
+      "step_range": [
+        13,
+        16
+      ]
+    },
+    {
+      "title": "What can go wrong",
+      "start_ms": 298914,
+      "end_ms": 355999,
+      "step_range": [
+        17,
+        19
+      ]
+    },
+    {
+      "title": "Bottom line",
+      "start_ms": 356399,
+      "end_ms": 372328,
+      "step_range": [
+        20,
+        20
+      ]
+    }
+  ],
+  "generated_at": 1777035435656
+}
