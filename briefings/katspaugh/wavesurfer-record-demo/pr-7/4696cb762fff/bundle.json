@@ -1,0 +1,975 @@
+{
+  "slug": "katspaugh/wavesurfer-record-demo",
+  "pr_number": 7,
+  "head_sha": "4696cb762fff82d722ff0767bcbcd3cf6e161347",
+  "head_sha_short": "4696cb762fff",
+  "pr_title": "Move MP3 export decode into the worker + PCM budget guard",
+  "created_at": 1777018819818,
+  "briefing": {
+    "id": 11,
+    "pr": {
+      "repo_slug": "katspaugh/wavesurfer-record-demo",
+      "number": 7
+    },
+    "head_sha": "4696cb762fff82d722ff0767bcbcd3cf6e161347",
+    "base_sha": "8ac6e2223b68422a79641fd103243d9f65de25c8",
+    "status": "done",
+    "model": "claude-sonnet-4-6",
+    "cost_cents": 16,
+    "latency_ms": 82999,
+    "summary_md": "This PR moves MP3 export decoding from the main thread into the Web Worker by transferring the recorded Blob's ArrayBuffer directly to the worker, where `OfflineAudioContext.decodeAudioData` is called inside `mp3EncoderCore.ts`'s new `decodeAndEncodeMp3Blob` function. The main-thread helper `decodeBlobToPcm` in `lib/audio.ts` is removed entirely, and `audioExportService.ts` now posts the raw ArrayBuffer with a transfer list instead of decoded PCM. A pre-dispatch memory budget guard using `navigator.deviceMemory` (12% of device RAM, capped at 400 MB) is added to `audioExportService.ts` to fail fast with a user-readable error rather than OOM-crashing the tab on oversized exports. Mono downmix is refactored from a full-duration allocation into a per-1152-sample block using a reused `Float32Array` scratch buffer, and tests in `audioExportService.test.ts` and `mp3EncoderCore.test.ts` are updated to match the new architecture.",
+    "file_summaries": [
+      {
+        "path": "src/lib/audio.ts",
+        "what_changed": "The `decodeBlobToPcm` function and its associated `Window.webkitAudioContext` global declaration are entirely removed from `src/lib/audio.ts`.",
+        "why_it_matters": "Decoding is now handled inside the worker via `OfflineAudioContext`, making this main-thread helper obsolete.",
+        "risk_hints": [
+          "Verify no other call sites import or reference `decodeBlobToPcm` outside the worker path — a missed import would be a runtime error",
+          "The `webkitAudioContext` declaration is also removed; confirm the worker or any remaining code that needs webkit-prefixed AudioContext has its own type declaration or polyfill"
+        ]
+      },
+      {
+        "path": "src/services/audioExportService.ts",
+        "what_changed": "Removes `decodeBlobToPcm` call from the service layer; instead transfers the raw `ArrayBuffer` directly to the worker via `postMessage`. Adds a pre-dispatch PCM memory budget check using `navigator.deviceMemory` (capped at 400 MB, 12% of device RAM) based on a worst-case estimate (48 kHz, stereo, 4 bytes/sample).",
+        "why_it_matters": "Moves expensive `decodeAudioData` off the main thread to avoid peak memory spikes that could OOM-crash the tab on long recordings.",
+        "risk_hints": [
+          "Budget check uses worst-case 48 kHz stereo even if the actual recording is 44.1 kHz mono — may reject exports that would actually fit in memory",
+          "`navigator.deviceMemory` is only available in secure contexts, rounds to nearest power of 2 (0.25–8 GB), and is absent in Firefox/Safari — fallback to 400 MB hard cap may be too conservative or too generous depending on actual device",
+          "12% of device memory heuristic is arbitrary; no citation or empirical basis provided — e.g. on an 8 GB device the budget is 400 MB (capped), but on a 1 GB device it's only ~123 MB which may reject valid short exports",
+          "After `arrayBuffer` is transferred, `recordedBlob` still holds a reference but the underlying buffer is detached — confirm nothing else reads `recordedBlob` after `postMessage`",
+          "Progress range changed from 0.14–0.96 to 0.06–0.96; verify UI progress bar doesn't visually regress or appear to stall at the new 0.06 initial tick",
+          "The duration check against `MAX_EXPORT_DURATION_MS` that previously used decoded audio duration is now gone — the only guard is the PCM byte budget, which uses `durationMs` (presumably from recording metadata); confirm `durationMs` is reliable and not zero/undefined for edge cases"
+        ]
+      },
+      {
+        "path": "src/services/mp3EncoderCore.ts",
+        "what_changed": "Adds `DecodeAndEncodeRequest` type and `decodeAndEncodeMp3Blob` function that decodes an `ArrayBuffer` via `OfflineAudioContext` inside the worker, then pipes `getChannelData()` views directly into a refactored `encodePcmToMp3Blob`. The old `createExportChannels` helper is removed and its mono-downmix logic is inlined per-block using a reused `monoScratch` `Float32Array(1152)` buffer.",
+        "why_it_matters": "Moving decode into the worker and eliminating full-duration Float32 allocations reduces main-thread peak memory from ~5.5 GB to roughly the compressed blob size for long stereo recordings.",
+        "risk_hints": [
+          "`OfflineAudioContext` is constructed with hardcoded `numberOfChannels=1` and `length=1` — these are dummy values for decode-only use, but if the spec or a browser engine ever validates them against the decoded content, it could silently affect output or throw.",
+          "`decodeContext` is created with `sampleRate=44100` regardless of the actual recording sample rate; `decodeAudioData` should still return the native sample rate, but the dummy context rate mismatch is worth verifying across browsers.",
+          "The `monoScratch` subarray is reused across iterations; if `encoder.encode` holds a reference to the passed subarray rather than copying it immediately, the last block's data could be corrupted by the next iteration's `fill(0)`.",
+          "`mixFactor` guard `sourceChannels.length > 0 ? 1 / sourceChannels.length : 1` is unreachable after the early `!primary` throw — dead code that may confuse readers.",
+          "Progress range for `decodeAndEncodeMp3Blob` is 0.12–0.98 (0.12 + 0.86*0.98), leaving the caller responsible for the 0–0.12 and 0.98–1.0 segments; misalignment with the old progress contract could break UI.",
+          "No test coverage for `decodeAndEncodeMp3Blob` is mentioned; the manual test plan items are unchecked, so cross-browser decode correctness is unverified."
+        ]
+      },
+      {
+        "path": "src/test/audioExportService.test.ts",
+        "what_changed": "Tests remove the `decodeBlobToPcm` mock and the `vi.mock('../lib/audio')` block entirely; they now stub `Worker` globally via `vi.stubGlobal` and assert that `postMessage` receives a raw `ArrayBuffer` plus a matching transfer list, and add a new test for the PCM budget guard using `navigator.deviceMemory: 2`.",
+        "why_it_matters": "Tests are updated to match the new architecture where decoding happens inside the worker rather than on the main thread, ensuring the service no longer calls `decodeBlobToPcm` before dispatching to the worker.",
+        "risk_hints": [
+          "FakeWorker.postMessage spy is set up in the constructor but the test accesses it via `FakeWorker.current` — if the constructor runs before the stub is registered the spy may be stale or null",
+          "The budget-guard test stubs `navigator.deviceMemory` to 2 but does not restore it; check that `afterEach` or `vi.unstubAllGlobals` cleans this up to avoid cross-test pollution",
+          "Progress value assertions use magic literals (0.06, 0.06 + 0.5 * 0.9) that must stay in sync with the implementation — no shared constant guards this",
+          "The ArrayBuffer transfer test calls `Blob.arrayBuffer()` implicitly; JSDOM/vitest environment must support this API or the test will silently pass with an empty/detached buffer",
+          "New test for PCM budget does not assert the exact error message beyond a regex — if the message changes the test still passes, which may mask regressions"
+        ]
+      },
+      {
+        "path": "src/test/mp3EncoderCore.test.ts",
+        "what_changed": "Removes the direct unit test for `createExportChannels` (which tested full-duration mono downmix allocation) and replaces it with an integration-style test that calls `encodePcmToMp3Blob` with stereo input targeting `channelCount: 1`, using 2304 samples (exactly 2 MPEG frames worth).",
+        "why_it_matters": "Likely reflects that `createExportChannels` was removed or made private/internal as part of the per-block downmix refactor, so the old unit test is no longer valid and coverage is maintained via the encoder path instead.",
+        "risk_hints": [
+          "New test only checks blob.type and blob.size > 0 — it does not verify the actual downmix math (L+R)/2 is correct, unlike the removed test which asserted exact values [0.5, 0, -0.5]",
+          "Comment 'without allocating a full-duration mix buffer' is a behavioral claim that the test cannot actually verify — no assertion proves absence of the allocation",
+          "If createExportChannels still exists but is just unexported, the old behavior is now untested",
+          "2304 sample size is suspiciously small; edge cases like non-multiple-of-1152 lengths are not covered"
+        ]
+      },
+      {
+        "path": "src/workers/mp3Encoder.worker.ts",
+        "what_changed": "The worker's message handler is updated to import and call `decodeAndEncodeMp3Blob`/`DecodeAndEncodeRequest` instead of `encodePcmToMp3Blob`/`EncodePcmRequest`, shifting the decode step from the main thread into the worker.",
+        "why_it_matters": "Moving decode into the worker prevents the main thread from holding large PCM allocations simultaneously with the encoded blob, reducing peak memory usage.",
+        "risk_hints": [
+          "Verify `DecodeAndEncodeRequest` carries a transferable `ArrayBuffer` and that the main thread actually transfers (not copies) it via `postMessage`",
+          "Confirm `decodeAndEncodeMp3Blob` handles `OfflineAudioContext` availability inside the worker context across Chrome/Safari/Firefox",
+          "Check error propagation path is unchanged — the catch block below the diff should still `postMessage` an error type"
+        ]
+      }
+    ],
+    "architecture_delta": {
+      "architecture_notes": "The decode step moves entirely out of the main thread: `audioExportService.ts` transfers an `ArrayBuffer` to `mp3Encoder.worker.ts`, which delegates to `decodeAndEncodeMp3Blob` in `mp3EncoderCore.ts`; the worker constructs an `OfflineAudioContext` at a hardcoded 44100 Hz with dummy channel/length values solely for decode, then feeds `getChannelData()` views directly into the encoder loop. The memory budget check in `audioExportService.ts` uses a worst-case 48 kHz stereo estimate against `navigator.deviceMemory` (with a 400 MB cap fallback), which is unavailable in Firefox and Safari. Progress reporting contracts shift from a 0.14–0.96 range to 0.06–0.96 in the service and 0.12–0.98 internally in the encoder core, requiring the UI layer to tolerate the new boundaries. The `decodeBlobToPcm` export and its `webkitAudioContext` type declaration are fully removed with no remaining call sites.",
+      "reviewer_checklist": [
+        "Confirm the ArrayBuffer is transferred (not copied) in the `postMessage` call in `audioExportService.ts` and that nothing reads `recordedBlob`'s buffer after the transfer.",
+        "Verify that `OfflineAudioContext` constructed with dummy `numberOfChannels=1`, `length=1`, and `sampleRate=44100` correctly decodes audio at its native sample rate across Chrome, Safari, and Firefox inside a worker context.",
+        "Check that the `monoScratch` Float32Array subarray passed to `encoder.encode` is consumed synchronously before the next iteration's `fill(0)` overwrites it — if the encoder defers processing, the last block's data could be silently corrupted.",
+        "Audit the PCM budget heuristic: confirm that `navigator.deviceMemory` absence in Firefox/Safari falls back gracefully, and that the worst-case 48 kHz stereo estimate does not incorrectly reject valid exports on low-memory devices.",
+        "Ensure the `webkitAudioContext` type declaration removal does not break any remaining code paths that reference the webkit-prefixed AudioContext, either in the worker or elsewhere in the codebase.",
+        "Validate that the error propagation path in `mp3Encoder.worker.ts` still posts an error message to the main thread when `decodeAndEncodeMp3Blob` throws, and that the new budget-guard error surfaces correctly in the UI."
+      ]
+    },
+    "tour": {
+      "chapters": [
+        {
+          "title": "Why this change",
+          "step_range": [
+            1,
+            2
+          ]
+        },
+        {
+          "title": "The memory budget guard",
+          "step_range": [
+            3,
+            6
+          ]
+        },
+        {
+          "title": "Decode moves into the worker",
+          "step_range": [
+            7,
+            11
+          ]
+        },
+        {
+          "title": "Consumers that had to adapt",
+          "step_range": [
+            12,
+            15
+          ]
+        },
+        {
+          "title": "What can go wrong",
+          "step_range": [
+            16,
+            18
+          ]
+        },
+        {
+          "title": "The bottom line",
+          "step_range": [
+            19,
+            19
+          ]
+        }
+      ],
+      "total_seconds": 255,
+      "steps": [
+        {
+          "step": 1,
+          "phase": "motivation",
+          "location": {
+            "file": "src/lib/audio.ts",
+            "line_range": [
+              52,
+              65
+            ],
+            "symbol": "decodeBlobToPcm"
+          },
+          "action": "open",
+          "narration": "Here is the function this PR is killing off: decodeBlobToPcm, living on the main thread. For a two-hour stereo recording it was forcing the browser to hold the compressed blob, the decoded audio buffer, and channel copies all at once — roughly five and a half gigabytes peak. That is what was crashing tabs.",
+          "estimated_seconds": 15
+        },
+        {
+          "step": 2,
+          "phase": "motivation",
+          "location": {
+            "file": "src/services/audioExportService.ts",
+            "line_range": [
+              36,
+              55
+            ],
+            "symbol": "encodeMp3Blob"
+          },
+          "action": "open",
+          "narration": "This diagram shows the before and after. Previously the main thread decoded the blob into PCM before handing anything to the worker. Now the main thread does a quick budget check, transfers the raw array buffer straight to the worker, and the worker owns the entire decode-and-encode pipeline. The main thread never touches the large PCM data at all.",
+          "estimated_seconds": 18,
+          "diagram": {
+            "kind": "sequence",
+            "title": "Before and after: where decode happens",
+            "mermaid": "sequenceDiagram\n  participant MT as Main Thread\n  participant W as mp3Encoder Worker\n  note over MT: BEFORE\n  MT->>MT: decodeBlobToPcm (OOM risk)\n  MT->>W: postMessage PCM Float32Arrays\n  note over MT: AFTER\n  MT->>MT: budget check only\n  MT->>W: transfer ArrayBuffer (blob)\n  W->>W: OfflineAudioContext.decodeAudioData\n  W->>W: encode PCM to MP3"
+          }
+        },
+        {
+          "step": 3,
+          "phase": "change",
+          "location": {
+            "file": "src/services/audioExportService.ts",
+            "line_range": [
+              36,
+              55
+            ],
+            "symbol": "encodeMp3Blob"
+          },
+          "action": "scroll-to",
+          "narration": "Let us walk through the new version of encode Mp3 Blob. The first thing it does before touching the worker at all is compute a worst-case PCM byte estimate from the recording duration. It assumes 48 kilohertz, stereo, four bytes per sample — the most pessimistic scenario — and compares that against a device-aware budget.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 4,
+          "phase": "change",
+          "location": {
+            "file": "src/services/audioExportService.ts",
+            "line_range": [
+              36,
+              60
+            ],
+            "symbol": "encodeMp3Blob"
+          },
+          "action": "scroll-to",
+          "narration": "The budget itself is twelve percent of navigator dot device Memory, capped at 400 megabytes. If the estimate exceeds the budget the function throws a user-readable error immediately — before any worker message is posted, before any buffer is allocated. The tab never gets a chance to crash.",
+          "callouts": [
+            {
+              "file": "src/test/audioExportService.test.ts",
+              "line": 1,
+              "note": "new budget-guard test stubs navigator.deviceMemory to 2"
+            }
+          ],
+          "estimated_seconds": 14
+        },
+        {
+          "step": 5,
+          "phase": "change",
+          "location": {
+            "file": "src/services/audioExportService.ts",
+            "line_range": [
+              60,
+              80
+            ],
+            "symbol": "encodeMp3Blob"
+          },
+          "action": "scroll-to",
+          "narration": "After the guard passes, the service calls array Buffer on the recorded blob and then posts it to the worker with a transfer list. Transferring rather than copying means the main thread's reference to that buffer is immediately detached — the worker owns it exclusively from this point on.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 6,
+          "phase": "change",
+          "location": {
+            "file": "src/services/audioExportService.ts",
+            "line_range": [
+              80,
+              100
+            ],
+            "symbol": "encodeMp3Blob"
+          },
+          "action": "scroll-to",
+          "narration": "Progress reporting also shifts here. The initial tick now fires at 0.06 instead of the old 0.14, because the service is no longer waiting for a decode step to complete before the worker starts. The UI layer needs to tolerate this new lower starting value.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 7,
+          "phase": "change",
+          "location": {
+            "file": "src/services/mp3EncoderCore.ts",
+            "line_range": [
+              24,
+              35
+            ],
+            "symbol": "DecodeAndEncodeRequest"
+          },
+          "action": "open",
+          "narration": "Over in the encoder core, a new type called Decode And Encode Request is defined. It carries the raw array buffer that was transferred from the main thread, plus the channel count and bitrate settings. This replaces the old Encode Pcm Request which expected pre-decoded Float32 arrays.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 8,
+          "phase": "change",
+          "location": {
+            "file": "src/services/mp3EncoderCore.ts",
+            "line_range": [
+              100,
+              130
+            ],
+            "symbol": "decodeAndEncodeMp3Blob"
+          },
+          "action": "scroll-to",
+          "narration": "Here is the new decode And Encode Mp3 Blob function — the heart of this PR. It constructs an Offline Audio Context inside the worker and calls decode Audio Data on the transferred buffer. The context is created with dummy channel and length values purely to get a decode context; the actual audio properties come from the decoded result.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 9,
+          "phase": "change",
+          "location": {
+            "file": "src/services/mp3EncoderCore.ts",
+            "line_range": [
+              130,
+              160
+            ],
+            "symbol": "decodeAndEncodeMp3Blob"
+          },
+          "action": "scroll-to",
+          "narration": "Once decoded, it calls get Channel Data to get direct views into the audio buffer — no Float32 copies. Those views are passed straight into encode Pcm To Mp3 Blob. The progress range inside this function runs from 0.12 to 0.98, leaving the caller responsible for the bookend segments.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 10,
+          "phase": "change",
+          "location": {
+            "file": "src/services/mp3EncoderCore.ts",
+            "line_range": [
+              37,
+              99
+            ],
+            "symbol": "encodePcmToMp3Blob"
+          },
+          "action": "flick-back",
+          "narration": "The encode Pcm To Mp3 Blob function itself is also refactored. The old create Export Channels helper that allocated a full-duration mono mix buffer is gone. In its place, a single reused Float32Array of 1152 samples — one MPEG frame — is filled per block and passed to the encoder, then overwritten on the next iteration.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 11,
+          "phase": "change",
+          "location": {
+            "file": "src/workers/mp3Encoder.worker.ts",
+            "line_range": [
+              1,
+              30
+            ],
+            "symbol": "decodeAndEncodeMp3Blob"
+          },
+          "action": "open",
+          "narration": "The worker's message handler is the thin glue layer. It now imports decode And Encode Mp3 Blob instead of encode Pcm To Mp3 Blob, and routes the incoming Decode And Encode Request straight to it. Error propagation through the catch block is unchanged — failures still post an error type back to the main thread.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 12,
+          "phase": "ripple",
+          "location": {
+            "file": "src/test/audioExportService.test.ts",
+            "line_range": [
+              1,
+              40
+            ]
+          },
+          "action": "open",
+          "narration": "The service tests had to be substantially reworked. The entire vi dot mock for lib slash audio is gone because there is no longer a decode Blob To Pcm call to intercept. Instead the tests stub the global Worker constructor and assert that post Message receives a raw Array Buffer plus a matching transfer list.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 13,
+          "phase": "ripple",
+          "location": {
+            "file": "src/test/audioExportService.test.ts",
+            "line_range": [
+              40,
+              80
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "There is also a new dedicated test for the budget guard. It stubs navigator dot device Memory to 2 gigabytes and passes a duration long enough to exceed twelve percent of that, then asserts the function rejects with a message matching the too-long-to-export pattern. This is the first automated coverage for the OOM protection path.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 14,
+          "phase": "ripple",
+          "location": {
+            "file": "src/test/mp3EncoderCore.test.ts",
+            "line_range": [
+              1,
+              40
+            ]
+          },
+          "action": "open",
+          "narration": "Over in the encoder core tests, the old unit test for create Export Channels is removed entirely since that function no longer exists. Its replacement is an integration-style test that calls encode Pcm To Mp3 Blob with stereo input targeting a mono output, using exactly 2304 samples — two full MPEG frames.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 15,
+          "phase": "ripple",
+          "location": {
+            "file": "src/lib/audio.ts",
+            "line_range": [
+              1,
+              51
+            ]
+          },
+          "action": "open",
+          "narration": "Back in lib slash audio dot ts, the removal of decode Blob To Pcm also takes the Window dot webkit Audio Context global declaration with it. Any code that still needs the webkit-prefixed Audio Context — including the worker — must now carry its own type declaration or polyfill. Worth a quick grep to confirm no stray imports remain.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 16,
+          "phase": "risk",
+          "location": {
+            "file": "src/services/audioExportService.ts",
+            "line_range": [
+              36,
+              55
+            ],
+            "symbol": "encodeMp3Blob"
+          },
+          "action": "flick-back",
+          "narration": "First risk: navigator dot device Memory is unavailable in Firefox and Safari, and it rounds to the nearest power of two in Chrome. The fallback is a hard cap of 400 megabytes, which could be too conservative on a modern desktop or too generous on a low-end mobile device. There is no empirical basis cited for the twelve percent heuristic.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 17,
+          "phase": "risk",
+          "location": {
+            "file": "src/services/mp3EncoderCore.ts",
+            "line_range": [
+              100,
+              130
+            ],
+            "symbol": "decodeAndEncodeMp3Blob"
+          },
+          "action": "jump-to-definition",
+          "narration": "Second risk: the Offline Audio Context is constructed with a hardcoded sample rate of 44100 hertz and dummy channel and length values. Decode Audio Data should still return the native sample rate of the recording, but the mismatch between the context rate and the actual content rate is worth verifying across Chrome, Safari, and Firefox — especially for recordings captured at 48 kilohertz.",
+          "estimated_seconds": 15
+        },
+        {
+          "step": 18,
+          "phase": "risk",
+          "location": {
+            "file": "src/services/mp3EncoderCore.ts",
+            "line_range": [
+              37,
+              99
+            ],
+            "symbol": "encodePcmToMp3Blob"
+          },
+          "action": "flick-back",
+          "narration": "Third risk: the mono scratch buffer is reused across every 1152-sample block and zeroed with fill between iterations. If the encoder's encode method holds a reference to the passed sub-array rather than copying it immediately, the next iteration's fill could corrupt the previous block's data. This is worth confirming against the lamejs encoder internals.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 19,
+          "phase": "wrap",
+          "location": {
+            "file": "src/services/mp3EncoderCore.ts",
+            "line_range": [
+              100,
+              160
+            ],
+            "symbol": "decodeAndEncodeMp3Blob"
+          },
+          "action": "scroll-to",
+          "narration": "The bottom line: this PR moves the most memory-intensive step of MP3 export entirely off the main thread, adds a fast-fail budget guard so long recordings fail gracefully instead of crashing the tab, and eliminates full-duration PCM allocations in favor of per-frame scratch buffers — a meaningful improvement in both safety and peak memory for long recordings.",
+          "estimated_seconds": 15
+        }
+      ]
+    },
+    "created_at": 1777018819818
+  },
+  "tour": {
+    "chapters": [
+      {
+        "title": "Why this change",
+        "step_range": [
+          1,
+          2
+        ]
+      },
+      {
+        "title": "The memory budget guard",
+        "step_range": [
+          3,
+          6
+        ]
+      },
+      {
+        "title": "Decode moves into the worker",
+        "step_range": [
+          7,
+          11
+        ]
+      },
+      {
+        "title": "Consumers that had to adapt",
+        "step_range": [
+          12,
+          15
+        ]
+      },
+      {
+        "title": "What can go wrong",
+        "step_range": [
+          16,
+          18
+        ]
+      },
+      {
+        "title": "The bottom line",
+        "step_range": [
+          19,
+          19
+        ]
+      }
+    ],
+    "total_seconds": 255,
+    "steps": [
+      {
+        "step": 1,
+        "phase": "motivation",
+        "location": {
+          "file": "src/lib/audio.ts",
+          "line_range": [
+            52,
+            65
+          ],
+          "symbol": "decodeBlobToPcm"
+        },
+        "action": "open",
+        "narration": "Here is the function this PR is killing off: decodeBlobToPcm, living on the main thread. For a two-hour stereo recording it was forcing the browser to hold the compressed blob, the decoded audio buffer, and channel copies all at once — roughly five and a half gigabytes peak. That is what was crashing tabs.",
+        "estimated_seconds": 15
+      },
+      {
+        "step": 2,
+        "phase": "motivation",
+        "location": {
+          "file": "src/services/audioExportService.ts",
+          "line_range": [
+            36,
+            55
+          ],
+          "symbol": "encodeMp3Blob"
+        },
+        "action": "open",
+        "narration": "This diagram shows the before and after. Previously the main thread decoded the blob into PCM before handing anything to the worker. Now the main thread does a quick budget check, transfers the raw array buffer straight to the worker, and the worker owns the entire decode-and-encode pipeline. The main thread never touches the large PCM data at all.",
+        "estimated_seconds": 18,
+        "diagram": {
+          "kind": "sequence",
+          "title": "Before and after: where decode happens",
+          "mermaid": "sequenceDiagram\n  participant MT as Main Thread\n  participant W as mp3Encoder Worker\n  note over MT: BEFORE\n  MT->>MT: decodeBlobToPcm (OOM risk)\n  MT->>W: postMessage PCM Float32Arrays\n  note over MT: AFTER\n  MT->>MT: budget check only\n  MT->>W: transfer ArrayBuffer (blob)\n  W->>W: OfflineAudioContext.decodeAudioData\n  W->>W: encode PCM to MP3"
+        }
+      },
+      {
+        "step": 3,
+        "phase": "change",
+        "location": {
+          "file": "src/services/audioExportService.ts",
+          "line_range": [
+            36,
+            55
+          ],
+          "symbol": "encodeMp3Blob"
+        },
+        "action": "scroll-to",
+        "narration": "Let us walk through the new version of encode Mp3 Blob. The first thing it does before touching the worker at all is compute a worst-case PCM byte estimate from the recording duration. It assumes 48 kilohertz, stereo, four bytes per sample — the most pessimistic scenario — and compares that against a device-aware budget.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 4,
+        "phase": "change",
+        "location": {
+          "file": "src/services/audioExportService.ts",
+          "line_range": [
+            36,
+            60
+          ],
+          "symbol": "encodeMp3Blob"
+        },
+        "action": "scroll-to",
+        "narration": "The budget itself is twelve percent of navigator dot device Memory, capped at 400 megabytes. If the estimate exceeds the budget the function throws a user-readable error immediately — before any worker message is posted, before any buffer is allocated. The tab never gets a chance to crash.",
+        "callouts": [
+          {
+            "file": "src/test/audioExportService.test.ts",
+            "line": 1,
+            "note": "new budget-guard test stubs navigator.deviceMemory to 2"
+          }
+        ],
+        "estimated_seconds": 14
+      },
+      {
+        "step": 5,
+        "phase": "change",
+        "location": {
+          "file": "src/services/audioExportService.ts",
+          "line_range": [
+            60,
+            80
+          ],
+          "symbol": "encodeMp3Blob"
+        },
+        "action": "scroll-to",
+        "narration": "After the guard passes, the service calls array Buffer on the recorded blob and then posts it to the worker with a transfer list. Transferring rather than copying means the main thread's reference to that buffer is immediately detached — the worker owns it exclusively from this point on.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 6,
+        "phase": "change",
+        "location": {
+          "file": "src/services/audioExportService.ts",
+          "line_range": [
+            80,
+            100
+          ],
+          "symbol": "encodeMp3Blob"
+        },
+        "action": "scroll-to",
+        "narration": "Progress reporting also shifts here. The initial tick now fires at 0.06 instead of the old 0.14, because the service is no longer waiting for a decode step to complete before the worker starts. The UI layer needs to tolerate this new lower starting value.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 7,
+        "phase": "change",
+        "location": {
+          "file": "src/services/mp3EncoderCore.ts",
+          "line_range": [
+            24,
+            35
+          ],
+          "symbol": "DecodeAndEncodeRequest"
+        },
+        "action": "open",
+        "narration": "Over in the encoder core, a new type called Decode And Encode Request is defined. It carries the raw array buffer that was transferred from the main thread, plus the channel count and bitrate settings. This replaces the old Encode Pcm Request which expected pre-decoded Float32 arrays.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 8,
+        "phase": "change",
+        "location": {
+          "file": "src/services/mp3EncoderCore.ts",
+          "line_range": [
+            100,
+            130
+          ],
+          "symbol": "decodeAndEncodeMp3Blob"
+        },
+        "action": "scroll-to",
+        "narration": "Here is the new decode And Encode Mp3 Blob function — the heart of this PR. It constructs an Offline Audio Context inside the worker and calls decode Audio Data on the transferred buffer. The context is created with dummy channel and length values purely to get a decode context; the actual audio properties come from the decoded result.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 9,
+        "phase": "change",
+        "location": {
+          "file": "src/services/mp3EncoderCore.ts",
+          "line_range": [
+            130,
+            160
+          ],
+          "symbol": "decodeAndEncodeMp3Blob"
+        },
+        "action": "scroll-to",
+        "narration": "Once decoded, it calls get Channel Data to get direct views into the audio buffer — no Float32 copies. Those views are passed straight into encode Pcm To Mp3 Blob. The progress range inside this function runs from 0.12 to 0.98, leaving the caller responsible for the bookend segments.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 10,
+        "phase": "change",
+        "location": {
+          "file": "src/services/mp3EncoderCore.ts",
+          "line_range": [
+            37,
+            99
+          ],
+          "symbol": "encodePcmToMp3Blob"
+        },
+        "action": "flick-back",
+        "narration": "The encode Pcm To Mp3 Blob function itself is also refactored. The old create Export Channels helper that allocated a full-duration mono mix buffer is gone. In its place, a single reused Float32Array of 1152 samples — one MPEG frame — is filled per block and passed to the encoder, then overwritten on the next iteration.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 11,
+        "phase": "change",
+        "location": {
+          "file": "src/workers/mp3Encoder.worker.ts",
+          "line_range": [
+            1,
+            30
+          ],
+          "symbol": "decodeAndEncodeMp3Blob"
+        },
+        "action": "open",
+        "narration": "The worker's message handler is the thin glue layer. It now imports decode And Encode Mp3 Blob instead of encode Pcm To Mp3 Blob, and routes the incoming Decode And Encode Request straight to it. Error propagation through the catch block is unchanged — failures still post an error type back to the main thread.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 12,
+        "phase": "ripple",
+        "location": {
+          "file": "src/test/audioExportService.test.ts",
+          "line_range": [
+            1,
+            40
+          ]
+        },
+        "action": "open",
+        "narration": "The service tests had to be substantially reworked. The entire vi dot mock for lib slash audio is gone because there is no longer a decode Blob To Pcm call to intercept. Instead the tests stub the global Worker constructor and assert that post Message receives a raw Array Buffer plus a matching transfer list.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 13,
+        "phase": "ripple",
+        "location": {
+          "file": "src/test/audioExportService.test.ts",
+          "line_range": [
+            40,
+            80
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "There is also a new dedicated test for the budget guard. It stubs navigator dot device Memory to 2 gigabytes and passes a duration long enough to exceed twelve percent of that, then asserts the function rejects with a message matching the too-long-to-export pattern. This is the first automated coverage for the OOM protection path.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 14,
+        "phase": "ripple",
+        "location": {
+          "file": "src/test/mp3EncoderCore.test.ts",
+          "line_range": [
+            1,
+            40
+          ]
+        },
+        "action": "open",
+        "narration": "Over in the encoder core tests, the old unit test for create Export Channels is removed entirely since that function no longer exists. Its replacement is an integration-style test that calls encode Pcm To Mp3 Blob with stereo input targeting a mono output, using exactly 2304 samples — two full MPEG frames.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 15,
+        "phase": "ripple",
+        "location": {
+          "file": "src/lib/audio.ts",
+          "line_range": [
+            1,
+            51
+          ]
+        },
+        "action": "open",
+        "narration": "Back in lib slash audio dot ts, the removal of decode Blob To Pcm also takes the Window dot webkit Audio Context global declaration with it. Any code that still needs the webkit-prefixed Audio Context — including the worker — must now carry its own type declaration or polyfill. Worth a quick grep to confirm no stray imports remain.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 16,
+        "phase": "risk",
+        "location": {
+          "file": "src/services/audioExportService.ts",
+          "line_range": [
+            36,
+            55
+          ],
+          "symbol": "encodeMp3Blob"
+        },
+        "action": "flick-back",
+        "narration": "First risk: navigator dot device Memory is unavailable in Firefox and Safari, and it rounds to the nearest power of two in Chrome. The fallback is a hard cap of 400 megabytes, which could be too conservative on a modern desktop or too generous on a low-end mobile device. There is no empirical basis cited for the twelve percent heuristic.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 17,
+        "phase": "risk",
+        "location": {
+          "file": "src/services/mp3EncoderCore.ts",
+          "line_range": [
+            100,
+            130
+          ],
+          "symbol": "decodeAndEncodeMp3Blob"
+        },
+        "action": "jump-to-definition",
+        "narration": "Second risk: the Offline Audio Context is constructed with a hardcoded sample rate of 44100 hertz and dummy channel and length values. Decode Audio Data should still return the native sample rate of the recording, but the mismatch between the context rate and the actual content rate is worth verifying across Chrome, Safari, and Firefox — especially for recordings captured at 48 kilohertz.",
+        "estimated_seconds": 15
+      },
+      {
+        "step": 18,
+        "phase": "risk",
+        "location": {
+          "file": "src/services/mp3EncoderCore.ts",
+          "line_range": [
+            37,
+            99
+          ],
+          "symbol": "encodePcmToMp3Blob"
+        },
+        "action": "flick-back",
+        "narration": "Third risk: the mono scratch buffer is reused across every 1152-sample block and zeroed with fill between iterations. If the encoder's encode method holds a reference to the passed sub-array rather than copying it immediately, the next iteration's fill could corrupt the previous block's data. This is worth confirming against the lamejs encoder internals.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 19,
+        "phase": "wrap",
+        "location": {
+          "file": "src/services/mp3EncoderCore.ts",
+          "line_range": [
+            100,
+            160
+          ],
+          "symbol": "decodeAndEncodeMp3Blob"
+        },
+        "action": "scroll-to",
+        "narration": "The bottom line: this PR moves the most memory-intensive step of MP3 export entirely off the main thread, adds a fast-fail budget guard so long recordings fail gracefully instead of crashing the tab, and eliminates full-duration PCM allocations in favor of per-frame scratch buffers — a meaningful improvement in both safety and peak memory for long recordings.",
+        "estimated_seconds": 15
+      }
+    ]
+  },
+  "markdown": "# PR Briefing — #7: Move MP3 export decode into the worker + PCM budget guard\n\n**Repo:** `katspaugh/wavesurfer-record-demo`  \n**Author:** katspaugh  \n**Branch:** `main` ← `fix/export-memory` (`4696cb7`)  \n**URL:** https://github.com/katspaugh/wavesurfer-record-demo/pull/7\n\n## Summary\n\nThis PR moves MP3 export decoding from the main thread into the Web Worker by transferring the recorded Blob's ArrayBuffer directly to the worker, where `OfflineAudioContext.decodeAudioData` is called inside `mp3EncoderCore.ts`'s new `decodeAndEncodeMp3Blob` function. The main-thread helper `decodeBlobToPcm` in `lib/audio.ts` is removed entirely, and `audioExportService.ts` now posts the raw ArrayBuffer with a transfer list instead of decoded PCM. A pre-dispatch memory budget guard using `navigator.deviceMemory` (12% of device RAM, capped at 400 MB) is added to `audioExportService.ts` to fail fast with a user-readable error rather than OOM-crashing the tab on oversized exports. Mono downmix is refactored from a full-duration allocation into a per-1152-sample block using a reused `Float32Array` scratch buffer, and tests in `audioExportService.test.ts` and `mp3EncoderCore.test.ts` are updated to match the new architecture.\n\n## Architecture notes\n\nThe decode step moves entirely out of the main thread: `audioExportService.ts` transfers an `ArrayBuffer` to `mp3Encoder.worker.ts`, which delegates to `decodeAndEncodeMp3Blob` in `mp3EncoderCore.ts`; the worker constructs an `OfflineAudioContext` at a hardcoded 44100 Hz with dummy channel/length values solely for decode, then feeds `getChannelData()` views directly into the encoder loop. The memory budget check in `audioExportService.ts` uses a worst-case 48 kHz stereo estimate against `navigator.deviceMemory` (with a 400 MB cap fallback), which is unavailable in Firefox and Safari. Progress reporting contracts shift from a 0.14–0.96 range to 0.06–0.96 in the service and 0.12–0.98 internally in the encoder core, requiring the UI layer to tolerate the new boundaries. The `decodeBlobToPcm` export and its `webkitAudioContext` type declaration are fully removed with no remaining call sites.\n\n## Ripple risks\n\nAnalyzed 4 changed exports. No untouched external callers found — all usages appear to be inside the PR diff.\n\n_Analyzed 6 file(s), 6 changed export(s), 0 uncovered callsite(s) in 3.3s._\n\n## Walkthrough outline\n\n_19 steps across 6 chapters, approximately 4 min 15s._\n\n### Why this change\n\n1. **motivation** · `src/lib/audio.ts` L52-65 `decodeBlobToPcm`\n   Here is the function this PR is killing off: decodeBlobToPcm, living on the main thread. For a two-hour stereo recording it was forcing the browser to hold the compressed blob, the decoded audio buffer, and channel copies all at once — roughly five and a half gigabytes peak. That is what was crashing tabs.\n\n2. **motivation** · `src/services/audioExportService.ts` L36-55 `encodeMp3Blob`\n   This diagram shows the before and after. Previously the main thread decoded the blob into PCM before handing anything to the worker. Now the main thread does a quick budget check, transfers the raw array buffer straight to the worker, and the worker owns the entire decode-and-encode pipeline. The main thread never touches the large PCM data at all.\n\n### The memory budget guard\n\n3. **change** · `src/services/audioExportService.ts` L36-55 `encodeMp3Blob`\n   Let us walk through the new version of encode Mp3 Blob. The first thing it does before touching the worker at all is compute a worst-case PCM byte estimate from the recording duration. It assumes 48 kilohertz, stereo, four bytes per sample — the most pessimistic scenario — and compares that against a device-aware budget.\n\n4. **change** · `src/services/audioExportService.ts` L36-60 `encodeMp3Blob`\n   The budget itself is twelve percent of navigator dot device Memory, capped at 400 megabytes. If the estimate exceeds the budget the function throws a user-readable error immediately — before any worker message is posted, before any buffer is allocated. The tab never gets a chance to crash.\n\n5. **change** · `src/services/audioExportService.ts` L60-80 `encodeMp3Blob`\n   After the guard passes, the service calls array Buffer on the recorded blob and then posts it to the worker with a transfer list. Transferring rather than copying means the main thread's reference to that buffer is immediately detached — the worker owns it exclusively from this point on.\n\n6. **change** · `src/services/audioExportService.ts` L80-100 `encodeMp3Blob`\n   Progress reporting also shifts here. The initial tick now fires at 0.06 instead of the old 0.14, because the service is no longer waiting for a decode step to complete before the worker starts. The UI layer needs to tolerate this new lower starting value.\n\n### Decode moves into the worker\n\n7. **change** · `src/services/mp3EncoderCore.ts` L24-35 `DecodeAndEncodeRequest`\n   Over in the encoder core, a new type called Decode And Encode Request is defined. It carries the raw array buffer that was transferred from the main thread, plus the channel count and bitrate settings. This replaces the old Encode Pcm Request which expected pre-decoded Float32 arrays.\n\n8. **change** · `src/services/mp3EncoderCore.ts` L100-130 `decodeAndEncodeMp3Blob`\n   Here is the new decode And Encode Mp3 Blob function — the heart of this PR. It constructs an Offline Audio Context inside the worker and calls decode Audio Data on the transferred buffer. The context is created with dummy channel and length values purely to get a decode context; the actual audio properties come from the decoded result.\n\n9. **change** · `src/services/mp3EncoderCore.ts` L130-160 `decodeAndEncodeMp3Blob`\n   Once decoded, it calls get Channel Data to get direct views into the audio buffer — no Float32 copies. Those views are passed straight into encode Pcm To Mp3 Blob. The progress range inside this function runs from 0.12 to 0.98, leaving the caller responsible for the bookend segments.\n\n10. **change** · `src/services/mp3EncoderCore.ts` L37-99 `encodePcmToMp3Blob`\n   The encode Pcm To Mp3 Blob function itself is also refactored. The old create Export Channels helper that allocated a full-duration mono mix buffer is gone. In its place, a single reused Float32Array of 1152 samples — one MPEG frame — is filled per block and passed to the encoder, then overwritten on the next iteration.\n\n11. **change** · `src/workers/mp3Encoder.worker.ts` L1-30 `decodeAndEncodeMp3Blob`\n   The worker's message handler is the thin glue layer. It now imports decode And Encode Mp3 Blob instead of encode Pcm To Mp3 Blob, and routes the incoming Decode And Encode Request straight to it. Error propagation through the catch block is unchanged — failures still post an error type back to the main thread.\n\n### Consumers that had to adapt\n\n12. **ripple** · `src/test/audioExportService.test.ts` L1-40\n   The service tests had to be substantially reworked. The entire vi dot mock for lib slash audio is gone because there is no longer a decode Blob To Pcm call to intercept. Instead the tests stub the global Worker constructor and assert that post Message receives a raw Array Buffer plus a matching transfer list.\n\n13. **ripple** · `src/test/audioExportService.test.ts` L40-80\n   There is also a new dedicated test for the budget guard. It stubs navigator dot device Memory to 2 gigabytes and passes a duration long enough to exceed twelve percent of that, then asserts the function rejects with a message matching the too-long-to-export pattern. This is the first automated coverage for the OOM protection path.\n\n14. **ripple** · `src/test/mp3EncoderCore.test.ts` L1-40\n   Over in the encoder core tests, the old unit test for create Export Channels is removed entirely since that function no longer exists. Its replacement is an integration-style test that calls encode Pcm To Mp3 Blob with stereo input targeting a mono output, using exactly 2304 samples — two full MPEG frames.\n\n15. **ripple** · `src/lib/audio.ts` L1-51\n   Back in lib slash audio dot ts, the removal of decode Blob To Pcm also takes the Window dot webkit Audio Context global declaration with it. Any code that still needs the webkit-prefixed Audio Context — including the worker — must now carry its own type declaration or polyfill. Worth a quick grep to confirm no stray imports remain.\n\n### What can go wrong\n\n16. **risk** · `src/services/audioExportService.ts` L36-55 `encodeMp3Blob`\n   First risk: navigator dot device Memory is unavailable in Firefox and Safari, and it rounds to the nearest power of two in Chrome. The fallback is a hard cap of 400 megabytes, which could be too conservative on a modern desktop or too generous on a low-end mobile device. There is no empirical basis cited for the twelve percent heuristic.\n\n17. **risk** · `src/services/mp3EncoderCore.ts` L100-130 `decodeAndEncodeMp3Blob`\n   Second risk: the Offline Audio Context is constructed with a hardcoded sample rate of 44100 hertz and dummy channel and length values. Decode Audio Data should still return the native sample rate of the recording, but the mismatch between the context rate and the actual content rate is worth verifying across Chrome, Safari, and Firefox — especially for recordings captured at 48 kilohertz.\n\n18. **risk** · `src/services/mp3EncoderCore.ts` L37-99 `encodePcmToMp3Blob`\n   Third risk: the mono scratch buffer is reused across every 1152-sample block and zeroed with fill between iterations. If the encoder's encode method holds a reference to the passed sub-array rather than copying it immediately, the next iteration's fill could corrupt the previous block's data. This is worth confirming against the lamejs encoder internals.\n\n### The bottom line\n\n19. **wrap** · `src/services/mp3EncoderCore.ts` L100-160 `decodeAndEncodeMp3Blob`\n   The bottom line: this PR moves the most memory-intensive step of MP3 export entirely off the main thread, adds a fast-fail budget guard so long recordings fail gracefully instead of crashing the tab, and eliminates full-duration PCM allocations in favor of per-frame scratch buffers — a meaningful improvement in both safety and peak memory for long recordings.\n\n## Reviewer checklist\n\n- [ ] Confirm the ArrayBuffer is transferred (not copied) in the `postMessage` call in `audioExportService.ts` and that nothing reads `recordedBlob`'s buffer after the transfer.\n- [ ] Verify that `OfflineAudioContext` constructed with dummy `numberOfChannels=1`, `length=1`, and `sampleRate=44100` correctly decodes audio at its native sample rate across Chrome, Safari, and Firefox inside a worker context.\n- [ ] Check that the `monoScratch` Float32Array subarray passed to `encoder.encode` is consumed synchronously before the next iteration's `fill(0)` overwrites it — if the encoder defers processing, the last block's data could be silently corrupted.\n- [ ] Audit the PCM budget heuristic: confirm that `navigator.deviceMemory` absence in Firefox/Safari falls back gracefully, and that the worst-case 48 kHz stereo estimate does not incorrectly reject valid exports on low-memory devices.\n- [ ] Ensure the `webkitAudioContext` type declaration removal does not break any remaining code paths that reference the webkit-prefixed AudioContext, either in the worker or elsewhere in the codebase.\n- [ ] Validate that the error propagation path in `mp3Encoder.worker.ts` still posts an error message to the main thread when `decodeAndEncodeMp3Blob` throws, and that the new budget-guard error surfaces correctly in the UI.\n\n## File-by-file\n\n### `src/lib/audio.ts`\n\nThe `decodeBlobToPcm` function and its associated `Window.webkitAudioContext` global declaration are entirely removed from `src/lib/audio.ts`.\n\n_Decoding is now handled inside the worker via `OfflineAudioContext`, making this main-thread helper obsolete._\n\n**Risks:**\n- Verify no other call sites import or reference `decodeBlobToPcm` outside the worker path — a missed import would be a runtime error\n- The `webkitAudioContext` declaration is also removed; confirm the worker or any remaining code that needs webkit-prefixed AudioContext has its own type declaration or polyfill\n\n### `src/services/audioExportService.ts`\n\nRemoves `decodeBlobToPcm` call from the service layer; instead transfers the raw `ArrayBuffer` directly to the worker via `postMessage`. Adds a pre-dispatch PCM memory budget check using `navigator.deviceMemory` (capped at 400 MB, 12% of device RAM) based on a worst-case estimate (48 kHz, stereo, 4 bytes/sample).\n\n_Moves expensive `decodeAudioData` off the main thread to avoid peak memory spikes that could OOM-crash the tab on long recordings._\n\n**Risks:**\n- Budget check uses worst-case 48 kHz stereo even if the actual recording is 44.1 kHz mono — may reject exports that would actually fit in memory\n- `navigator.deviceMemory` is only available in secure contexts, rounds to nearest power of 2 (0.25–8 GB), and is absent in Firefox/Safari — fallback to 400 MB hard cap may be too conservative or too generous depending on actual device\n- 12% of device memory heuristic is arbitrary; no citation or empirical basis provided — e.g. on an 8 GB device the budget is 400 MB (capped), but on a 1 GB device it's only ~123 MB which may reject valid short exports\n- After `arrayBuffer` is transferred, `recordedBlob` still holds a reference but the underlying buffer is detached — confirm nothing else reads `recordedBlob` after `postMessage`\n- Progress range changed from 0.14–0.96 to 0.06–0.96; verify UI progress bar doesn't visually regress or appear to stall at the new 0.06 initial tick\n- The duration check against `MAX_EXPORT_DURATION_MS` that previously used decoded audio duration is now gone — the only guard is the PCM byte budget, which uses `durationMs` (presumably from recording metadata); confirm `durationMs` is reliable and not zero/undefined for edge cases\n\n### `src/services/mp3EncoderCore.ts`\n\nAdds `DecodeAndEncodeRequest` type and `decodeAndEncodeMp3Blob` function that decodes an `ArrayBuffer` via `OfflineAudioContext` inside the worker, then pipes `getChannelData()` views directly into a refactored `encodePcmToMp3Blob`. The old `createExportChannels` helper is removed and its mono-downmix logic is inlined per-block using a reused `monoScratch` `Float32Array(1152)` buffer.\n\n_Moving decode into the worker and eliminating full-duration Float32 allocations reduces main-thread peak memory from ~5.5 GB to roughly the compressed blob size for long stereo recordings._\n\n**Risks:**\n- `OfflineAudioContext` is constructed with hardcoded `numberOfChannels=1` and `length=1` — these are dummy values for decode-only use, but if the spec or a browser engine ever validates them against the decoded content, it could silently affect output or throw.\n- `decodeContext` is created with `sampleRate=44100` regardless of the actual recording sample rate; `decodeAudioData` should still return the native sample rate, but the dummy context rate mismatch is worth verifying across browsers.\n- The `monoScratch` subarray is reused across iterations; if `encoder.encode` holds a reference to the passed subarray rather than copying it immediately, the last block's data could be corrupted by the next iteration's `fill(0)`.\n- `mixFactor` guard `sourceChannels.length > 0 ? 1 / sourceChannels.length : 1` is unreachable after the early `!primary` throw — dead code that may confuse readers.\n- Progress range for `decodeAndEncodeMp3Blob` is 0.12–0.98 (0.12 + 0.86*0.98), leaving the caller responsible for the 0–0.12 and 0.98–1.0 segments; misalignment with the old progress contract could break UI.\n- No test coverage for `decodeAndEncodeMp3Blob` is mentioned; the manual test plan items are unchecked, so cross-browser decode correctness is unverified.\n\n### `src/test/audioExportService.test.ts`\n\nTests remove the `decodeBlobToPcm` mock and the `vi.mock('../lib/audio')` block entirely; they now stub `Worker` globally via `vi.stubGlobal` and assert that `postMessage` receives a raw `ArrayBuffer` plus a matching transfer list, and add a new test for the PCM budget guard using `navigator.deviceMemory: 2`.\n\n_Tests are updated to match the new architecture where decoding happens inside the worker rather than on the main thread, ensuring the service no longer calls `decodeBlobToPcm` before dispatching to the worker._\n\n**Risks:**\n- FakeWorker.postMessage spy is set up in the constructor but the test accesses it via `FakeWorker.current` — if the constructor runs before the stub is registered the spy may be stale or null\n- The budget-guard test stubs `navigator.deviceMemory` to 2 but does not restore it; check that `afterEach` or `vi.unstubAllGlobals` cleans this up to avoid cross-test pollution\n- Progress value assertions use magic literals (0.06, 0.06 + 0.5 * 0.9) that must stay in sync with the implementation — no shared constant guards this\n- The ArrayBuffer transfer test calls `Blob.arrayBuffer()` implicitly; JSDOM/vitest environment must support this API or the test will silently pass with an empty/detached buffer\n- New test for PCM budget does not assert the exact error message beyond a regex — if the message changes the test still passes, which may mask regressions\n\n### `src/test/mp3EncoderCore.test.ts`\n\nRemoves the direct unit test for `createExportChannels` (which tested full-duration mono downmix allocation) and replaces it with an integration-style test that calls `encodePcmToMp3Blob` with stereo input targeting `channelCount: 1`, using 2304 samples (exactly 2 MPEG frames worth).\n\n_Likely reflects that `createExportChannels` was removed or made private/internal as part of the per-block downmix refactor, so the old unit test is no longer valid and coverage is maintained via the encoder path instead._\n\n**Risks:**\n- New test only checks blob.type and blob.size > 0 — it does not verify the actual downmix math (L+R)/2 is correct, unlike the removed test which asserted exact values [0.5, 0, -0.5]\n- Comment 'without allocating a full-duration mix buffer' is a behavioral claim that the test cannot actually verify — no assertion proves absence of the allocation\n- If createExportChannels still exists but is just unexported, the old behavior is now untested\n- 2304 sample size is suspiciously small; edge cases like non-multiple-of-1152 lengths are not covered\n\n### `src/workers/mp3Encoder.worker.ts`\n\nThe worker's message handler is updated to import and call `decodeAndEncodeMp3Blob`/`DecodeAndEncodeRequest` instead of `encodePcmToMp3Blob`/`EncodePcmRequest`, shifting the decode step from the main thread into the worker.\n\n_Moving decode into the worker prevents the main thread from holding large PCM allocations simultaneously with the encoded blob, reducing peak memory usage._\n\n**Risks:**\n- Verify `DecodeAndEncodeRequest` carries a transferable `ArrayBuffer` and that the main thread actually transfers (not copies) it via `postMessage`\n- Confirm `decodeAndEncodeMp3Blob` handles `OfflineAudioContext` availability inside the worker context across Chrome/Safari/Firefox\n- Check error propagation path is unchanged — the catch block below the diff should still `postMessage` an error type\n\n---\n_Generated by prbrief • model: claude-sonnet-4-6 • 8 LLM calls • $0.16 • 83.0s_",
+  "files": {
+    "src/lib/audio.ts": "/** Centralizes audio format limits, display helpers, downloads, and blob decoding. */\nconst PREFERRED_MIME_TYPES = [\n  'audio/webm;codecs=opus',\n  'audio/webm',\n  'audio/mp4',\n  'audio/ogg;codecs=opus',\n]\n\nexport const MAX_RECORDING_MS = 4 * 60 * 60 * 1000\nexport const CHUNK_TIMESLICE_MS = 10_000\nexport const MAX_EXPORT_DURATION_MS = 2 * 60 * 60 * 1000\n\nexport function getSupportedRecordingMimeType() {\n  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') {\n    return ''\n  }\n\n  return PREFERRED_MIME_TYPES.find((type) => MediaRecorder.isTypeSupported(type)) ?? ''\n}\n\nexport function formatDuration(ms: number) {\n  const totalSeconds = Math.max(0, Math.floor(ms / 1000))\n  const hours = Math.floor(totalSeconds / 3600)\n  const minutes = Math.floor((totalSeconds % 3600) / 60)\n  const seconds = totalSeconds % 60\n  return [hours, minutes, seconds].map((part) => String(part).padStart(2, '0')).join(':')\n}\n\nexport function formatBytes(bytes: number) {\n  if (bytes === 0) return '0 B'\n\n  const units = ['B', 'KB', 'MB', 'GB']\n  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)\n  const value = bytes / 1024 ** exponent\n  return `${value.toFixed(value >= 10 || exponent === 0 ? 0 : 1)} ${units[exponent]}`\n}\n\nexport function downloadBlob(blob: Blob, filename: string) {\n  const url = URL.createObjectURL(blob)\n  const anchor = document.createElement('a')\n  anchor.href = url\n  anchor.download = filename\n  anchor.rel = 'noopener'\n  anchor.style.display = 'none'\n  document.body.appendChild(anchor)\n  anchor.click()\n  anchor.remove()\n\n  window.setTimeout(() => URL.revokeObjectURL(url), 1000)\n}\n\n",
+    "src/services/audioExportService.ts": "/** Handles MP3 export limits, device-memory budget, and worker-based blob encoding. */\nimport { MAX_EXPORT_DURATION_MS } from '../lib/audio'\nimport type { Mp3ExportSettings } from './mp3EncoderCore'\n\ntype EncoderMessage =\n  | { type: 'progress'; progress: number }\n  | { type: 'done'; blob: Blob }\n  | { type: 'error'; error: string }\n\nconst DEFAULT_PCM_BYTE_BUDGET = 400 * 1024 * 1024\nconst WORST_CASE_SAMPLE_RATE = 48_000\nconst WORST_CASE_CHANNELS = 2\nconst BYTES_PER_SAMPLE = 4\n\nfunction formatMaxMinutes() {\n  return Math.round(MAX_EXPORT_DURATION_MS / 60_000)\n}\n\nfunction formatMb(bytes: number) {\n  return `${Math.round(bytes / (1024 * 1024))} MB`\n}\n\nfunction estimateWorstCasePcmBytes(durationMs: number) {\n  return Math.ceil((durationMs / 1000) * WORST_CASE_SAMPLE_RATE * WORST_CASE_CHANNELS * BYTES_PER_SAMPLE)\n}\n\nfunction getPcmByteBudget() {\n  const deviceMemoryGb = (navigator as { deviceMemory?: number }).deviceMemory\n  if (typeof deviceMemoryGb === 'number' && deviceMemoryGb > 0) {\n    // Budget ~12% of advertised device memory, never above the hard cap.\n    return Math.min(deviceMemoryGb * 1024 * 1024 * 1024 * 0.12, DEFAULT_PCM_BYTE_BUDGET)\n  }\n  return DEFAULT_PCM_BYTE_BUDGET\n}\n\nexport async function encodeMp3Blob(\n  recordedBlob: Blob,\n  settings: Mp3ExportSettings,\n  durationMs: number,\n  onProgress: (progress: number) => void,\n) {\n  if (durationMs > MAX_EXPORT_DURATION_MS) {\n    throw new Error(\n      `MP3 export is capped at ${formatMaxMinutes()} minutes in this build. Trim the recording before exporting.`,\n    )\n  }\n\n  const worstCasePcmBytes = estimateWorstCasePcmBytes(durationMs)\n  const budget = getPcmByteBudget()\n  if (worstCasePcmBytes > budget) {\n    throw new Error(\n      `This recording is too long to export on this device — decoding would need about ${formatMb(worstCasePcmBytes)} of memory. Trim the recording and try again.`,\n    )\n  }\n\n  const arrayBuffer = await recordedBlob.arrayBuffer()\n  onProgress(0.06)\n\n  const worker = new Worker(new URL('../workers/mp3Encoder.worker.ts', import.meta.url), { type: 'module' })\n\n  try {\n    return await new Promise<Blob>((resolve, reject) => {\n      worker.onmessage = (event: MessageEvent<EncoderMessage>) => {\n        if (event.data.type === 'progress') {\n          onProgress(0.06 + event.data.progress * 0.9)\n          return\n        }\n\n        if (event.data.type === 'error') {\n          reject(new Error(event.data.error))\n          return\n        }\n\n        resolve(event.data.blob)\n      }\n\n      worker.onerror = (event) => reject(new Error(event.message || 'MP3 worker failed during encoding.'))\n      worker.onmessageerror = () => reject(new Error('MP3 worker returned an unreadable encoding result.'))\n      worker.postMessage({ arrayBuffer, settings }, [arrayBuffer])\n    })\n  } finally {\n    worker.terminate()\n  }\n}\n",
+    "src/services/mp3EncoderCore.ts": "/** Defines MP3 export settings and converts decoded PCM audio into an MP3 blob. */\nimport { createMp3Encoder } from 'wasm-media-encoders'\n\nexport type Mp3BitRate = 16 | 24 | 32 | 40 | 48 | 64 | 80 | 96 | 112 | 128 | 160 | 192 | 224 | 256 | 320\nexport type Mp3ChannelCount = 1 | 2\n\nexport type Mp3ExportSettings = {\n  bitRate: Mp3BitRate\n  channelCount: Mp3ChannelCount\n}\n\nexport const MP3_BIT_RATES: Mp3BitRate[] = [16, 24, 32, 40, 48, 64, 96, 128, 160, 192, 256, 320]\nexport const DEFAULT_MP3_EXPORT_SETTINGS: Mp3ExportSettings = {\n  bitRate: 32,\n  channelCount: 1,\n}\n\nexport type EncodePcmRequest = {\n  channels: Float32Array[]\n  sampleRate: number\n  settings: Mp3ExportSettings\n}\n\nexport type DecodeAndEncodeRequest = {\n  arrayBuffer: ArrayBuffer\n  settings: Mp3ExportSettings\n}\n\nconst BLOCK_SIZE = 1152\n\nfunction copyChunkToArrayBuffer(chunk: Uint8Array) {\n  const buffer = new ArrayBuffer(chunk.byteLength)\n  new Uint8Array(buffer).set(chunk)\n  return buffer\n}\n\nexport async function encodePcmToMp3Blob(\n  { channels, sampleRate, settings }: EncodePcmRequest,\n  onProgress: (progress: number) => void,\n) {\n  const sourceChannels = channels.filter((channel) => channel.length > 0)\n  const primary = sourceChannels[0]\n  if (!primary) {\n    throw new Error('No PCM channels were available for MP3 encoding.')\n  }\n\n  const encoder = await createMp3Encoder()\n  encoder.configure({\n    bitrate: settings.bitRate,\n    channels: settings.channelCount,\n    sampleRate,\n  })\n\n  const mp3Chunks: ArrayBuffer[] = []\n  const wantsMono = settings.channelCount === 1\n  // Reused across iterations so a long mono export does not allocate a full-duration buffer.\n  const monoScratch = wantsMono ? new Float32Array(BLOCK_SIZE) : null\n  const mixFactor = sourceChannels.length > 0 ? 1 / sourceChannels.length : 1\n\n  for (let offset = 0; offset < primary.length; offset += BLOCK_SIZE) {\n    const end = Math.min(offset + BLOCK_SIZE, primary.length)\n    const blockLength = end - offset\n\n    let blockChannels: Float32Array[]\n    if (wantsMono && monoScratch) {\n      const mono = monoScratch.subarray(0, blockLength)\n      mono.fill(0)\n      for (const channel of sourceChannels) {\n        const upper = Math.min(end, channel.length)\n        for (let index = offset; index < upper; index += 1) {\n          const localIndex = index - offset\n          mono[localIndex] = (mono[localIndex] ?? 0) + (channel[index] ?? 0) * mixFactor\n        }\n      }\n      blockChannels = [mono]\n    } else {\n      const left = primary.subarray(offset, end)\n      const right = (sourceChannels[1] ?? primary).subarray(offset, end)\n      blockChannels = [left, right]\n    }\n\n    const encoded = encoder.encode(blockChannels)\n    if (encoded.length > 0) {\n      mp3Chunks.push(copyChunkToArrayBuffer(encoded))\n    }\n\n    if (offset % (BLOCK_SIZE * 64) === 0) {\n      onProgress(Math.min(0.98, offset / primary.length))\n    }\n  }\n\n  const finalChunk = encoder.finalize()\n  if (finalChunk.length > 0) {\n    mp3Chunks.push(copyChunkToArrayBuffer(finalChunk))\n  }\n\n  return new Blob(mp3Chunks, { type: 'audio/mpeg' })\n}\n\nexport async function decodeAndEncodeMp3Blob(\n  { arrayBuffer, settings }: DecodeAndEncodeRequest,\n  onProgress: (progress: number) => void,\n) {\n  const OfflineAudioContextCtor =\n    (globalThis as { OfflineAudioContext?: typeof OfflineAudioContext }).OfflineAudioContext ??\n    (globalThis as { webkitOfflineAudioContext?: typeof OfflineAudioContext }).webkitOfflineAudioContext\n  if (!OfflineAudioContextCtor) {\n    throw new Error('This environment cannot decode audio for MP3 export.')\n  }\n\n  const decodeContext = new OfflineAudioContextCtor(1, 1, 44_100)\n  let audioBuffer: AudioBuffer\n  try {\n    audioBuffer = await decodeContext.decodeAudioData(arrayBuffer)\n  } catch {\n    throw new Error('The recorded audio could not be decoded for MP3 export.')\n  }\n\n  onProgress(0.12)\n\n  const channelCount = Math.min(audioBuffer.numberOfChannels, 2)\n  // getChannelData returns views into AudioBuffer-owned storage — feed them directly, no copy.\n  const channels: Float32Array[] = []\n  for (let index = 0; index < channelCount; index += 1) {\n    channels.push(audioBuffer.getChannelData(index))\n  }\n\n  return encodePcmToMp3Blob(\n    { channels, sampleRate: audioBuffer.sampleRate, settings },\n    (innerProgress) => onProgress(0.12 + innerProgress * 0.86),\n  )\n}\n",
+    "src/workers/mp3Encoder.worker.ts": "import { decodeAndEncodeMp3Blob, type DecodeAndEncodeRequest } from '../services/mp3EncoderCore'\n\nself.onmessage = async (event: MessageEvent<DecodeAndEncodeRequest>) => {\n  try {\n    const blob = await decodeAndEncodeMp3Blob(event.data, (progress) => {\n      self.postMessage({ type: 'progress', progress })\n    })\n    self.postMessage({ type: 'done', blob })\n  } catch (error) {\n    self.postMessage({\n      type: 'error',\n      error: error instanceof Error ? error.message : 'MP3 encoding failed.',\n    })\n  }\n}\n",
+    "src/test/audioExportService.test.ts": "// @vitest-environment happy-dom\nimport { afterEach, describe, expect, it, vi } from 'vitest'\nimport { MAX_EXPORT_DURATION_MS } from '../lib/audio'\nimport { encodeMp3Blob } from '../services/audioExportService'\n\nclass FakeWorker {\n  static current: FakeWorker | null = null\n\n  onerror: ((event: ErrorEvent) => void) | null = null\n  onmessage: ((event: MessageEvent) => void) | null = null\n  onmessageerror: (() => void) | null = null\n  terminate = vi.fn()\n\n  constructor() {\n    FakeWorker.current = this\n  }\n\n  postMessage = vi.fn(() => {\n    this.onmessage?.({ data: { type: 'progress', progress: 0.5 } } as MessageEvent)\n    this.onmessage?.({ data: { type: 'done', blob: new Blob(['mp3'], { type: 'audio/mpeg' }) } } as MessageEvent)\n  })\n}\n\nafterEach(() => {\n  FakeWorker.current = null\n  vi.unstubAllGlobals()\n  vi.clearAllMocks()\n})\n\ndescribe('audioExportService', () => {\n  it('rejects recordings over the configured export duration cap before touching the worker', async () => {\n    const workerSpy = vi.fn()\n    vi.stubGlobal('Worker', workerSpy)\n\n    await expect(encodeMp3Blob(\n      new Blob(['audio']),\n      { bitRate: 32, channelCount: 1 },\n      MAX_EXPORT_DURATION_MS + 1,\n      () => undefined,\n    )).rejects.toThrow('MP3 export is capped')\n\n    expect(workerSpy).not.toHaveBeenCalled()\n  })\n\n  it('rejects when the estimated PCM budget exceeds the device memory allowance', async () => {\n    vi.stubGlobal('navigator', { deviceMemory: 2 })\n    const workerSpy = vi.fn()\n    vi.stubGlobal('Worker', workerSpy)\n\n    // 2 hour worst-case estimate comfortably exceeds 12% of 2 GB.\n    await expect(encodeMp3Blob(\n      new Blob(['audio']),\n      { bitRate: 32, channelCount: 1 },\n      2 * 60 * 60 * 1000,\n      () => undefined,\n    )).rejects.toThrow(/too long to export on this device/)\n\n    expect(workerSpy).not.toHaveBeenCalled()\n  })\n\n  it('transfers the decoded ArrayBuffer to the worker and terminates after a successful encode', async () => {\n    vi.stubGlobal('Worker', FakeWorker)\n    const onProgress = vi.fn()\n    const blobBytes = new Uint8Array([1, 2, 3, 4])\n    const recordedBlob = new Blob([blobBytes])\n\n    const result = await encodeMp3Blob(\n      recordedBlob,\n      { bitRate: 32, channelCount: 1 },\n      1_000,\n      onProgress,\n    )\n\n    expect(result.type).toBe('audio/mpeg')\n    const lastCall = FakeWorker.current?.postMessage.mock.calls[0]\n    if (!lastCall) throw new Error('worker was not invoked')\n    const [payload, transferList] = lastCall as unknown as [\n      { arrayBuffer: ArrayBuffer; settings: unknown },\n      Transferable[],\n    ]\n    expect(payload).toMatchObject({ settings: { bitRate: 32, channelCount: 1 } })\n    expect(payload.arrayBuffer).toBeInstanceOf(ArrayBuffer)\n    expect(transferList).toEqual([payload.arrayBuffer])\n    expect(FakeWorker.current?.terminate).toHaveBeenCalledTimes(1)\n    expect(onProgress).toHaveBeenCalledWith(0.06)\n    expect(onProgress).toHaveBeenCalledWith(0.06 + 0.5 * 0.9)\n  })\n})\n",
+    "src/test/mp3EncoderCore.test.ts": "import { describe, expect, it } from 'vitest'\nimport {\n  DEFAULT_MP3_EXPORT_SETTINGS,\n  encodePcmToMp3Blob,\n} from '../services/mp3EncoderCore'\n\ndescribe('mp3EncoderCore', () => {\n  it('defaults to voice-oriented mono output settings', () => {\n    expect(DEFAULT_MP3_EXPORT_SETTINGS).toEqual({\n      bitRate: 32,\n      channelCount: 1,\n    })\n  })\n\n  it('encodes PCM samples to an MP3 blob', async () => {\n    const progress: number[] = []\n    const sampleRate = 44_100\n    const samples = new Float32Array(2304)\n\n    const blob = await encodePcmToMp3Blob({\n      channels: [samples],\n      sampleRate,\n      settings: DEFAULT_MP3_EXPORT_SETTINGS,\n    }, (value) => progress.push(value))\n\n    expect(blob.type).toBe('audio/mpeg')\n    expect(blob.size).toBeGreaterThan(0)\n    expect(progress.length).toBeGreaterThan(0)\n  })\n\n  it('downmixes stereo input to a mono MP3 without allocating a full-duration mix buffer', async () => {\n    const sampleRate = 44_100\n    const left = new Float32Array(2304)\n    const right = new Float32Array(2304)\n    for (let index = 0; index < left.length; index += 1) {\n      left[index] = 0.25\n      right[index] = -0.25\n    }\n\n    const blob = await encodePcmToMp3Blob({\n      channels: [left, right],\n      sampleRate,\n      settings: { bitRate: 32, channelCount: 1 },\n    }, () => undefined)\n\n    expect(blob.type).toBe('audio/mpeg')\n    expect(blob.size).toBeGreaterThan(0)\n  })\n})\n"
+  },
+  "has_audio": true,
+  "has_video": true,
+  "has_thumbnail": true,
+  "audio_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/katspaugh/wavesurfer-record-demo/pr-7/4696cb762fff/audio.mp3",
+  "audio_manifest": {
+    "file": "audio.mp3",
+    "total_ms": 399652,
+    "silence_ms": 400,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "adapter": "elevenlabs",
+    "model": "eleven_turbo_v2_5",
+    "intro": {
+      "narration": "Grab some popcorn and lay back. I'm going to walk you through this pull request in a few minutes. Here's the pitch: This PR moves MP3 export decoding from the main thread into the Web Worker by transferring the recorded Blob's ArrayBuffer directly to the worker, where `OfflineAudioContext.decodeAudioData` is called inside `mp3EncoderCore.ts`'s new `decodeAndEncodeMp3Blob` function. Let's dive right in.",
+      "narration_ms": 25263,
+      "gap_ms": 500,
+      "duration_ms": 25763
+    },
+    "steps": [
+      {
+        "step": 1,
+        "start_ms": 25763,
+        "end_ms": 44710
+      },
+      {
+        "step": 2,
+        "start_ms": 45110,
+        "end_ms": 64522
+      },
+      {
+        "step": 3,
+        "start_ms": 64922,
+        "end_ms": 84241
+      },
+      {
+        "step": 4,
+        "start_ms": 84641,
+        "end_ms": 103356
+      },
+      {
+        "step": 5,
+        "start_ms": 103756,
+        "end_ms": 118988
+      },
+      {
+        "step": 6,
+        "start_ms": 119388,
+        "end_ms": 135410
+      },
+      {
+        "step": 7,
+        "start_ms": 135810,
+        "end_ms": 152528
+      },
+      {
+        "step": 8,
+        "start_ms": 152928,
+        "end_ms": 172619
+      },
+      {
+        "step": 9,
+        "start_ms": 173019,
+        "end_ms": 191641
+      },
+      {
+        "step": 10,
+        "start_ms": 192041,
+        "end_ms": 213171
+      },
+      {
+        "step": 11,
+        "start_ms": 213571,
+        "end_ms": 230429
+      },
+      {
+        "step": 12,
+        "start_ms": 230829,
+        "end_ms": 249776
+      },
+      {
+        "step": 13,
+        "start_ms": 250176,
+        "end_ms": 268984
+      },
+      {
+        "step": 14,
+        "start_ms": 269384,
+        "end_ms": 288889
+      },
+      {
+        "step": 15,
+        "start_ms": 289289,
+        "end_ms": 310466
+      },
+      {
+        "step": 16,
+        "start_ms": 310866,
+        "end_ms": 331300
+      },
+      {
+        "step": 17,
+        "start_ms": 331700,
+        "end_ms": 356406
+      },
+      {
+        "step": 18,
+        "start_ms": 356806,
+        "end_ms": 377611
+      },
+      {
+        "step": 19,
+        "start_ms": 378011,
+        "end_ms": 399652
+      }
+    ],
+    "chapters": [
+      {
+        "title": "Why this change",
+        "start_ms": 25763,
+        "end_ms": 64522,
+        "step_range": [
+          1,
+          2
+        ]
+      },
+      {
+        "title": "The memory budget guard",
+        "start_ms": 64922,
+        "end_ms": 135410,
+        "step_range": [
+          3,
+          6
+        ]
+      },
+      {
+        "title": "Decode moves into the worker",
+        "start_ms": 135810,
+        "end_ms": 230429,
+        "step_range": [
+          7,
+          11
+        ]
+      },
+      {
+        "title": "Consumers that had to adapt",
+        "start_ms": 230829,
+        "end_ms": 310466,
+        "step_range": [
+          12,
+          15
+        ]
+      },
+      {
+        "title": "What can go wrong",
+        "start_ms": 310866,
+        "end_ms": 377611,
+        "step_range": [
+          16,
+          18
+        ]
+      },
+      {
+        "title": "The bottom line",
+        "start_ms": 378011,
+        "end_ms": 399652,
+        "step_range": [
+          19,
+          19
+        ]
+      }
+    ],
+    "generated_at": 1777018909188
+  },
+  "audio_manifest_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/katspaugh/wavesurfer-record-demo/pr-7/4696cb762fff/audio.json",
+  "video_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/katspaugh/wavesurfer-record-demo/pr-7/4696cb762fff/video-github.mp4",
+  "thumbnail_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/katspaugh/wavesurfer-record-demo/pr-7/4696cb762fff/thumbnail.png",
+  "pr_url": "https://github.com/katspaugh/wavesurfer-record-demo/pull/7",
+  "is_sample": false,
+  "sample_id": null
+}
