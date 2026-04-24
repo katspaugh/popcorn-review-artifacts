@@ -1,0 +1,168 @@
+{
+  "file": "audio.mp3",
+  "total_ms": 348754,
+  "silence_ms": 400,
+  "voice": "nPczCjzI2devNBz1zQrb",
+  "adapter": "elevenlabs",
+  "model": "eleven_turbo_v2_5",
+  "intro": {
+    "narration": "Grab some popcorn and let's dive in. Here's the pitch: This PR replaces the single-owner model for counterfactual safes with a many-to-many junction table (`counterfactual_safe_users`) so multiple users can share a single canonical `counterfactual_safes` row.",
+    "narration_ms": 15000,
+    "gap_ms": 500,
+    "duration_ms": 15500
+  },
+  "steps": [
+    {
+      "step": 1,
+      "start_ms": 15500,
+      "end_ms": 36862
+    },
+    {
+      "step": 2,
+      "start_ms": 37262,
+      "end_ms": 49801
+    },
+    {
+      "step": 3,
+      "start_ms": 50201,
+      "end_ms": 66269
+    },
+    {
+      "step": 4,
+      "start_ms": 66669,
+      "end_ms": 87381
+    },
+    {
+      "step": 5,
+      "start_ms": 87781,
+      "end_ms": 103106
+    },
+    {
+      "step": 6,
+      "start_ms": 103506,
+      "end_ms": 118274
+    },
+    {
+      "step": 7,
+      "start_ms": 118674,
+      "end_ms": 132699
+    },
+    {
+      "step": 8,
+      "start_ms": 133099,
+      "end_ms": 152929
+    },
+    {
+      "step": 9,
+      "start_ms": 153329,
+      "end_ms": 171766
+    },
+    {
+      "step": 10,
+      "start_ms": 172166,
+      "end_ms": 185030
+    },
+    {
+      "step": 11,
+      "start_ms": 185430,
+      "end_ms": 202055
+    },
+    {
+      "step": 12,
+      "start_ms": 202455,
+      "end_ms": 218291
+    },
+    {
+      "step": 13,
+      "start_ms": 218691,
+      "end_ms": 234109
+    },
+    {
+      "step": 14,
+      "start_ms": 234509,
+      "end_ms": 253131
+    },
+    {
+      "step": 15,
+      "start_ms": 253531,
+      "end_ms": 272432
+    },
+    {
+      "step": 16,
+      "start_ms": 272832,
+      "end_ms": 294798
+    },
+    {
+      "step": 17,
+      "start_ms": 295198,
+      "end_ms": 312659
+    },
+    {
+      "step": 18,
+      "start_ms": 313059,
+      "end_ms": 330428
+    },
+    {
+      "step": 19,
+      "start_ms": 330828,
+      "end_ms": 348754
+    }
+  ],
+  "chapters": [
+    {
+      "title": "Why this change",
+      "start_ms": 15500,
+      "end_ms": 49801,
+      "step_range": [
+        1,
+        2
+      ]
+    },
+    {
+      "title": "The junction table foundation",
+      "start_ms": 50201,
+      "end_ms": 118274,
+      "step_range": [
+        3,
+        6
+      ]
+    },
+    {
+      "title": "Rewriting the repository",
+      "start_ms": 118674,
+      "end_ms": 202055,
+      "step_range": [
+        7,
+        11
+      ]
+    },
+    {
+      "title": "Consumers that had to adapt",
+      "start_ms": 202455,
+      "end_ms": 272432,
+      "step_range": [
+        12,
+        15
+      ]
+    },
+    {
+      "title": "What can go wrong",
+      "start_ms": 272832,
+      "end_ms": 330428,
+      "step_range": [
+        16,
+        18
+      ]
+    },
+    {
+      "title": "The bottom line",
+      "start_ms": 330828,
+      "end_ms": 348754,
+      "step_range": [
+        19,
+        19
+      ]
+    }
+  ],
+  "generated_at": 1777034338215
+}

@@ -1,0 +1,1000 @@
+{
+  "slug": "safe-global/safe-client-gateway",
+  "pr_number": 3055,
+  "head_sha": "6057d28770d9b715f548e0ddcd5d34bfa69e3a1d",
+  "head_sha_short": "6057d28770d9",
+  "pr_title": "feat: share counterfactual safes across users via junction table",
+  "created_at": 1777034243862,
+  "briefing": {
+    "id": 13,
+    "pr": {
+      "repo_slug": "safe-global/safe-client-gateway",
+      "number": 3055
+    },
+    "head_sha": "6057d28770d9b715f548e0ddcd5d34bfa69e3a1d",
+    "base_sha": "870e0fa1c69722a3ba214a69f88ecdf4f0d18010",
+    "status": "done",
+    "model": "claude-sonnet-4-6",
+    "cost_cents": 19,
+    "latency_ms": 88626,
+    "summary_md": "This PR replaces the single-owner model for counterfactual safes with a many-to-many junction table (`counterfactual_safe_users`) so multiple users can share a single canonical `counterfactual_safes` row. A new migration creates the junction table, backfills associations from the existing `creator_id` column (which is retained for audit purposes), and the `CounterfactualSafesRepository` is rewritten to make `POST /v1/users/counterfactual-safes` idempotent on matching init params, returning 409 only when submitted params differ from the stored row. `GET` now queries through the junction table so users see all safes they are associated with, and `DELETE` removes only the caller's junction row rather than the canonical record. The `CounterfactualSafeUser` entity, module registration, service layer, interface, and e2e/integration tests are all updated to reflect the new semantics.",
+    "file_summaries": [
+      {
+        "path": "migrations/1777636800000-create-counterfactual-safe-users.ts",
+        "what_changed": "Adds a new migration `CreateCounterfactualSafeUsers1777636800000` that creates the `counterfactual_safe_users` junction table with FK constraints to `counterfactual_safes` and `users`, an `updated_at` trigger, and backfills existing rows from `counterfactual_safes.creator_id`.",
+        "why_it_matters": "Enables multiple users to share a single canonical counterfactual safe row, replacing the implicit single-owner model with an explicit many-to-many association.",
+        "risk_hints": [
+          "Backfill uses `ON CONFLICT DO NOTHING` — verify no valid associations are silently skipped if `creator_id` is non-null but duplicated across rows",
+          "Down migration drops the table with CASCADE but does not restore any data; if rolled back after the application code is deployed, GET/DELETE endpoints will break",
+          "No index on `counterfactual_safe_id` column — queries filtering by safe rather than user will do full scans; the unique constraint covers the pair but a dedicated index on `counterfactual_safe_id` alone may be needed",
+          "Timestamp `1777636800000` is in the future (May 2026); verify migration ordering is intentional and won't conflict with other pending migrations",
+          "The `update_updated_at` procedure is assumed to already exist — migration will fail if it doesn't; no guard or creation step is included"
+        ]
+      },
+      {
+        "path": "src/modules/counterfactual-safes/counterfactual-safes.module.ts",
+        "what_changed": "Imports `CounterfactualSafeUser` entity and registers it alongside `CounterfactualSafe` in `TypeOrmModule.forFeature` within `CounterfactualSafesModule`.",
+        "why_it_matters": "Makes the new junction table entity available for injection as a TypeORM repository within the module's providers.",
+        "risk_hints": [
+          "Verify `CounterfactualSafeUser` entity is also registered in the database connection's entity list (e.g., PostgresDatabaseModuleV2 or ormconfig), otherwise TypeORM won't recognize the table.",
+          "Check that no other module independently registers `CounterfactualSafeUser` causing duplicate repository conflicts."
+        ]
+      },
+      {
+        "path": "src/modules/counterfactual-safes/datasources/entities/counterfactual-safe-user.entity.db.ts",
+        "what_changed": "New TypeORM entity `CounterfactualSafeUser` added for the `counterfactual_safe_users` junction table, with `ManyToOne` relations to `CounterfactualSafe` and `User`, a unique constraint on `(counterfactualSafe, user)`, and `createdAt`/`updatedAt` timestamp columns.",
+        "why_it_matters": "This junction table enables multiple users to share a single canonical counterfactual safe row, replacing the previous single-owner model.",
+        "risk_hints": [
+          "updatedAt has `update: false` so it will never be updated after insert — likely intentional but should be confirmed",
+          "The `@Unique` decorator references relation objects `['counterfactualSafe', 'user']` rather than column names `['counterfactual_safe_id', 'user_id']` — verify TypeORM resolves this correctly to the FK columns",
+          "No `updated_at` trigger or auto-update mechanism exists; if audit trail of changes is needed this is insufficient",
+          "CounterfactualSafe entity needs a corresponding `OneToMany` back-reference or the relation target `counterfactualSafe.id` used in ManyToOne callback is misleading"
+        ]
+      },
+      {
+        "path": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.integration.spec.ts",
+        "what_changed": "Integration tests for `CounterfactualSafesRepository` are updated to cover the new junction-table model: `CounterfactualSafeUser` entity is added to the test data source, `afterEach` cleanup deletes junction rows first, `findByCreatorId` tests are renamed/rewritten to `findByUserId`, and new test cases cover idempotent re-submission, cross-user sharing, and delete-only-unlinks semantics.",
+        "why_it_matters": "The tests validate that the repository's new shared-identity behavior (idempotent create, junction-based visibility, association-only delete) works correctly against a real Postgres schema including the new migration.",
+        "risk_hints": [
+          "Delete test 'should remove the user association and the canonical row when no other associations remain' asserts canonical row is kept (length 1) but the comment says 'intentionally kept (audit trail)' — verify this matches the actual repository implementation and is not a test bug masking a missing cascade delete",
+          "afterEach cleanup deletes junction rows before canonical rows; if FK constraints are DEFERRABLE or cascade is set differently, order may not matter, but confirm the migration's FK definition matches this assumed dependency order",
+          "The 'should throw UniqueConstraintError when (chainId, address) collides with different init params' test uses two different users — confirm the repository actually compares init params and throws UniqueConstraintError (not a raw DB constraint error) when params differ",
+          "No test verifies that `findByUserId` does NOT return safes the user has no association with (only the 'empty array' case covers a user with zero associations, not a user who exists but is unassociated with a specific safe that exists)",
+          "The 'delete multiple associations' test only checks junction rows are empty but does not assert canonical rows still exist, potentially missing a regression if delete accidentally cascades"
+        ]
+      },
+      {
+        "path": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.interface.ts",
+        "what_changed": "Renamed `creatorId` to `userId` in two interface method signatures: `findByCreatorId` (renamed to `findByUserId`) and the `delete` method's parameter object.",
+        "why_it_matters": "Reflects the shift from creator-only ownership to shared user associations via the junction table, ensuring the interface contract matches the new multi-user semantics.",
+        "risk_hints": [
+          "Verify all implementations of ICounterfactualSafesRepository are updated to match the renamed method and parameter",
+          "Check that no callers still pass `creatorId` as a named property to `delete` — structural typing could silently accept the old shape if the field name wasn't enforced",
+          "Confirm `findByCreatorId` is fully removed/replaced and not still referenced anywhere under the old name"
+        ]
+      },
+      {
+        "path": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+        "what_changed": "Rewrites `CounterfactualSafesRepository`: `create` now runs inside a transaction that upserts via find-then-insert and calls `associateUser` (inserting into `CounterfactualSafeUser` with `orIgnore`); `findByCreatorId` is renamed `findByUserId` and queries through the junction table; `delete` now removes only the caller's `CounterfactualSafeUser` row rather than the canonical `CounterfactualSafe` row.",
+        "why_it_matters": "Enables multiple users to share a single canonical counterfactual safe row, making POST idempotent on matching init params and returning 409 only on param mismatch, while DELETE becomes a soft-unlink that preserves the row for other users.",
+        "risk_hints": [
+          "isSameInitParams does a strict string equality on owners array elements but `create` normalizes incoming owners via getAddress while the stored row may have been inserted before normalization — verify the DB always stores checksummed addresses",
+          "isSameAddressList is order-sensitive; two registrations with the same owners in different order will be treated as mismatched params and throw 409",
+          "The transaction in `create` does a non-locking `findOne` then `insert`, creating a TOCTOU race: two concurrent POSTs for the same (chainId, address) can both see no existing row and both attempt insert, causing a DB unique-constraint error that is no longer caught",
+          "delete builds a dynamic OR clause with positional parameter names (chainId0, address0, …); if args.payload is empty the WHERE clause is an empty string which is invalid SQL — no guard against empty payload",
+          "associateUser uses `orIgnore` which silently swallows all insert errors on CounterfactualSafeUser, not just duplicate-key; any FK violation or schema error will be silently ignored",
+          "findByUserId uses a raw column name string 'cfsu.counterfactual_safe_id = cfs.id' and 'cfsu.user_id' — these must exactly match the DB column names; a mismatch will fail at runtime rather than compile time",
+          "The old `delete` path called `findOrFail` which threw NotFoundException; the new path also throws NotFoundException but only checks junction rows — a user who was never associated but requests deletion of a valid CF safe will get NotFoundException rather than a more descriptive error"
+        ]
+      },
+      {
+        "path": "src/modules/counterfactual-safes/routes/__tests__/counterfactual-safes.controller.e2e-spec.ts",
+        "what_changed": "Replaces the 'duplicate chainId+address → 409' test with three new e2e tests: same-user idempotent re-submit returns 201, different-user with mismatched init params returns 409, and different-user with matching init params returns 201 and is visible via GET. Also renames the delete test description and casts `cfSafe.chainId` to `string` to fix TypeScript indexing.",
+        "why_it_matters": "Validates the new shared-identity semantics end-to-end: idempotent writes, conflict only on param mismatch, and cross-user visibility through the junction table.",
+        "risk_hints": [
+          "The 'second user attach' test only checks getResponse.body.safes[cfSafe.chainId].length === 1 for user2, but does not verify user1 still sees the safe — regression in user1 visibility is untested here",
+          "No test covers DELETE behavior after two users share a safe (i.e., that deleting user2's association leaves user1's intact)",
+          "The idempotent re-submit test uses the same user/token for both POSTs but does not assert the response body or that no duplicate row was created",
+          "wallet creation requests (POST /v1/users/wallet) are not awaited with .expect(), so failures there would be silently swallowed"
+        ]
+      },
+      {
+        "path": "src/modules/counterfactual-safes/routes/counterfactual-safes.service.ts",
+        "what_changed": "Renames the parameter passed to `findByCreatorId` (now `findByUserId`) and `delete` from `creatorId: userId` to `userId` in `CounterfactualSafesService`, aligning the service layer with the new junction-table-based repository methods.",
+        "why_it_matters": "Ensures GET and DELETE operations query/remove by the authenticated user's junction-table association rather than the legacy `creator_id` column, enabling shared counterfactual safe visibility and non-destructive unlink on delete.",
+        "risk_hints": [
+          "Verify `findByUserId` in the repository actually queries the junction table and not just a renamed `creator_id` filter",
+          "Confirm `delete` in the repository only removes the junction row and does not cascade-delete the canonical `counterfactual_safes` row",
+          "Check that `getAuthenticatedUserIdOrFail` still returns the correct user identity after the junction-table migration"
+        ]
+      }
+    ],
+    "architecture_delta": {
+      "architecture_notes": "The change introduces a `counterfactual_safe_users` junction table with FK references to `counterfactual_safes` and `users`, turning a one-to-many (creator→safe) relationship into many-to-many. The `CounterfactualSafesRepository.create` method now runs a find-then-insert transaction with `associateUser` using `orIgnore`, and `findByUserId` issues a raw-column JOIN against the junction table. The `CounterfactualSafesService` passes `userId` (not `creatorId`) to all repository calls. The migration is forward-only with a DROP TABLE down path, meaning a rollback after deployment would break GET and DELETE at runtime.",
+      "reviewer_checklist": [
+        "Verify the `create` transaction is safe under concurrent POSTs for the same `(chainId, address)`: the non-locking `findOne` followed by `insert` has a TOCTOU race where two simultaneous requests can both miss the existing row and collide on the unique constraint, which is no longer caught by the error handler.",
+        "Confirm `isSameAddressList` (used in `isSameInitParams`) is order-insensitive or that the API contract guarantees owners are always submitted in a canonical order, since two registrations with the same owners in different order will currently produce a 409 conflict.",
+        "Check that `associateUser` using `orIgnore` does not silently swallow FK violations or other unexpected insert errors on `counterfactual_safe_users` beyond the intended duplicate-key case.",
+        "Ensure the `CounterfactualSafeUser` entity is registered in the global TypeORM entity list (e.g., `PostgresDatabaseModuleV2`) and not only in `CounterfactualSafesModule`, otherwise the table will be unknown to the ORM at runtime.",
+        "Validate the down migration is safe: dropping `counterfactual_safe_users` with CASCADE after the new application code is deployed will break GET and DELETE endpoints — confirm the rollback procedure includes a coordinated code revert.",
+        "Add or confirm e2e coverage for DELETE after two users share a safe (assert user1's association survives after user2 deletes), and verify GET for user1 still returns the safe after user2 attaches — both gaps are noted in the current test suite."
+      ]
+    },
+    "tour": {
+      "chapters": [
+        {
+          "title": "Why this change",
+          "step_range": [
+            1,
+            2
+          ]
+        },
+        {
+          "title": "The junction table foundation",
+          "step_range": [
+            3,
+            6
+          ]
+        },
+        {
+          "title": "Rewriting the repository",
+          "step_range": [
+            7,
+            11
+          ]
+        },
+        {
+          "title": "Consumers that had to adapt",
+          "step_range": [
+            12,
+            15
+          ]
+        },
+        {
+          "title": "What can go wrong",
+          "step_range": [
+            16,
+            18
+          ]
+        },
+        {
+          "title": "The bottom line",
+          "step_range": [
+            19,
+            19
+          ]
+        }
+      ],
+      "total_seconds": 255,
+      "steps": [
+        {
+          "step": 1,
+          "phase": "motivation",
+          "location": {
+            "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+            "line_range": [
+              21,
+              40
+            ],
+            "symbol": "CounterfactualSafesRepository"
+          },
+          "action": "open",
+          "narration": "Here is the problem this PR solves. When two users independently register the same counterfactual safe — same chain, same predicted address, same init params — the old code would hit a unique constraint and return a 409 conflict to the second user. That is wrong: both users have a legitimate claim to the same canonical safe row.",
+          "estimated_seconds": 15
+        },
+        {
+          "step": 2,
+          "phase": "motivation",
+          "location": {
+            "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+            "line_range": [
+              21,
+              40
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "The fix is a many-to-many junction table. One canonical row lives in counterfactual safes, and each user gets their own row in counterfactual safe users pointing at it. Let's see how that plays out across the codebase.",
+          "estimated_seconds": 13,
+          "diagram": {
+            "kind": "flowchart",
+            "title": "Before and after the junction table",
+            "mermaid": "flowchart LR\n  subgraph Before\n    UA[User A POST] --> CS1[(counterfactual_safes\ncreator_id = A)]\n    UB[User B POST] -->|409 Conflict| CS1\n  end\n  subgraph After\n    UC[User A POST] --> CS2[(counterfactual_safes\ncreator_id = A)]\n    UC --> JA[(cf_safe_users\nA x Safe)]\n    UD[User B POST\nmatching params] --> CS2\n    UD --> JB[(cf_safe_users\nB x Safe)]\n    UE[User B POST\nmismatched params] -->|409 Conflict| CS2\n  end"
+          }
+        },
+        {
+          "step": 3,
+          "phase": "change",
+          "location": {
+            "file": "migrations/1777636800000-create-counterfactual-safe-users.ts",
+            "line_range": [
+              4,
+              30
+            ],
+            "symbol": "CreateCounterfactualSafeUsers1777636800000"
+          },
+          "action": "open",
+          "narration": "The migration creates the counterfactual safe users table with foreign keys to both counterfactual safes and users, and a unique constraint on the pair so no duplicate associations can sneak in. It also wires up the update timestamp trigger that the rest of the schema already uses.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 4,
+          "phase": "change",
+          "location": {
+            "file": "migrations/1777636800000-create-counterfactual-safe-users.ts",
+            "line_range": [
+              31,
+              55
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "Right after creating the table, the migration backfills it. Every existing row in counterfactual safes that has a non-null creator id gets an association row inserted for that creator, using on conflict do nothing so the backfill is safe to re-run. The creator id column itself stays on the canonical table as an audit trail of who first registered the safe.",
+          "estimated_seconds": 15
+        },
+        {
+          "step": 5,
+          "phase": "change",
+          "location": {
+            "file": "src/modules/counterfactual-safes/datasources/entities/counterfactual-safe-user.entity.db.ts",
+            "line_range": [
+              13,
+              45
+            ],
+            "symbol": "CounterfactualSafeUser"
+          },
+          "action": "open",
+          "narration": "Here is the TypeORM entity that maps to that new table. It has two many-to-one relations — one to CounterfactualSafe and one to User — and a unique decorator covering both relation fields so the ORM enforces the same constraint at the application layer.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 6,
+          "phase": "change",
+          "location": {
+            "file": "src/modules/counterfactual-safes/counterfactual-safes.module.ts",
+            "line_range": [
+              17,
+              35
+            ],
+            "symbol": "CounterfactualSafesModule"
+          },
+          "action": "open",
+          "narration": "The module now registers CounterfactualSafeUser alongside CounterfactualSafe in the TypeORM feature list, which makes the junction repository injectable. Without this line the new entity would be invisible to the dependency injection container.",
+          "callouts": [
+            {
+              "file": "src/modules/counterfactual-safes/datasources/entities/counterfactual-safe-user.entity.db.ts",
+              "line": 13,
+              "note": "entity registered here"
+            }
+          ],
+          "estimated_seconds": 12
+        },
+        {
+          "step": 7,
+          "phase": "change",
+          "location": {
+            "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+            "line_range": [
+              21,
+              50
+            ],
+            "symbol": "CounterfactualSafesRepository"
+          },
+          "action": "open",
+          "narration": "Now the heart of the PR: the repository rewrite. The constructor now injects a second TypeORM repository for CounterfactualSafeUser alongside the existing one for CounterfactualSafe. Everything else flows from that second injection.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 8,
+          "phase": "change",
+          "location": {
+            "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+            "line_range": [
+              51,
+              100
+            ],
+            "symbol": "CounterfactualSafesRepository"
+          },
+          "action": "scroll-to",
+          "narration": "The create method now runs inside a transaction. It first does a find-one lookup for an existing row matching chain and address. If one exists and the init params match exactly, it skips the insert and jumps straight to associating the current user. If the params differ, it throws a 409 conflict — that is the only remaining conflict case.",
+          "estimated_seconds": 15
+        },
+        {
+          "step": 9,
+          "phase": "change",
+          "location": {
+            "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+            "line_range": [
+              101,
+              130
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "The private associate user helper inserts a row into counterfactual safe users with or-ignore semantics, so if the calling user is already associated — say they re-submit the same safe — the insert is silently skipped and the operation returns cleanly. That is what makes the POST endpoint idempotent.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 10,
+          "phase": "change",
+          "location": {
+            "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+            "line_range": [
+              131,
+              165
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "Find by user id now joins through the junction table. It selects canonical safe rows where a matching junction row exists for the requesting user, so a user sees every safe they are associated with regardless of who first created it.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 11,
+          "phase": "change",
+          "location": {
+            "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+            "line_range": [
+              166,
+              200
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "Delete is now a soft unlink. It removes only the caller's row from counterfactual safe users and leaves the canonical safe row intact for any other users still associated with it. The old behavior would have deleted the canonical row outright, which would have broken other users' references.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 12,
+          "phase": "ripple",
+          "location": {
+            "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.interface.ts",
+            "line_range": [
+              15,
+              35
+            ],
+            "symbol": "ICounterfactualSafesRepository"
+          },
+          "action": "open",
+          "narration": "The repository interface reflects the rename: find by creator id is now find by user id, and the delete method's parameter object uses user id instead of creator id. Any other implementation of this interface — including mocks in tests — must be updated to match.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 13,
+          "phase": "ripple",
+          "location": {
+            "file": "src/modules/counterfactual-safes/routes/counterfactual-safes.service.ts",
+            "line_range": [
+              11,
+              45
+            ],
+            "symbol": "CounterfactualSafesService"
+          },
+          "action": "open",
+          "narration": "The service layer is a thin pass-through change. The calls to find by creator id and delete now pass user id instead of creator id, aligning with the renamed interface. The authenticated user identity comes from the same helper as before, so no auth logic changed.",
+          "callouts": [
+            {
+              "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.interface.ts",
+              "line": 15,
+              "note": "interface contract updated to userId"
+            }
+          ],
+          "estimated_seconds": 12
+        },
+        {
+          "step": 14,
+          "phase": "ripple",
+          "location": {
+            "file": "src/modules/counterfactual-safes/routes/__tests__/counterfactual-safes.controller.e2e-spec.ts",
+            "line_range": [
+              1,
+              40
+            ]
+          },
+          "action": "open",
+          "narration": "The end-to-end tests now cover three POST scenarios: same user re-submitting returns 201, a different user with matching params also returns 201 and can see the safe via GET, and a different user with mismatched params still gets 409. These replace the old single duplicate-conflict test.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 15,
+          "phase": "ripple",
+          "location": {
+            "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.integration.spec.ts",
+            "line_range": [
+              1,
+              50
+            ]
+          },
+          "action": "open",
+          "narration": "The integration spec adds CounterfactualSafeUser to the test data source and cleans up junction rows before canonical rows in after-each, respecting the foreign key order. New test cases cover two-user sharing, shared visibility after a second attach, and the delete-only-unlinks path against a real Postgres instance.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 16,
+          "phase": "risk",
+          "location": {
+            "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+            "line_range": [
+              51,
+              100
+            ]
+          },
+          "action": "flick-back",
+          "narration": "There is a time-of-check-to-time-of-use race in the create method. Two concurrent POSTs for the same chain and address can both pass the find-one check before either inserts, and the second insert will hit the database unique constraint rather than the application-level 409 path. The error surfaced to the caller may be a raw database error rather than the expected conflict response.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 17,
+          "phase": "risk",
+          "location": {
+            "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+            "line_range": [
+              101,
+              130
+            ]
+          },
+          "action": "scroll-to",
+          "narration": "The associate user helper uses or-ignore, which silently swallows all insert errors on the junction table — not just duplicate-key violations. A foreign key failure or schema mismatch would be swallowed too, making those bugs invisible at runtime. Worth a close look before merging.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 18,
+          "phase": "risk",
+          "location": {
+            "file": "migrations/1777636800000-create-counterfactual-safe-users.ts",
+            "line_range": [
+              55,
+              75
+            ]
+          },
+          "action": "flick-back",
+          "narration": "The down migration drops the junction table with cascade but does not restore any data. If this migration is rolled back after the application code is already deployed, the GET and DELETE endpoints will fail at runtime because they query a table that no longer exists. Plan the rollback window carefully.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 19,
+          "phase": "wrap",
+          "location": {
+            "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+            "line_range": [
+              21,
+              50
+            ],
+            "symbol": "CounterfactualSafesRepository"
+          },
+          "action": "flick-back",
+          "narration": "Bottom line: this PR turns counterfactual safe ownership from a single-creator lock into a shared association model, making the POST endpoint idempotent on matching params and letting DELETE cleanly unlink one user without disturbing others — a solid foundation for cross-space safe sharing.",
+          "estimated_seconds": 14
+        }
+      ]
+    },
+    "created_at": 1777034243862
+  },
+  "tour": {
+    "chapters": [
+      {
+        "title": "Why this change",
+        "step_range": [
+          1,
+          2
+        ]
+      },
+      {
+        "title": "The junction table foundation",
+        "step_range": [
+          3,
+          6
+        ]
+      },
+      {
+        "title": "Rewriting the repository",
+        "step_range": [
+          7,
+          11
+        ]
+      },
+      {
+        "title": "Consumers that had to adapt",
+        "step_range": [
+          12,
+          15
+        ]
+      },
+      {
+        "title": "What can go wrong",
+        "step_range": [
+          16,
+          18
+        ]
+      },
+      {
+        "title": "The bottom line",
+        "step_range": [
+          19,
+          19
+        ]
+      }
+    ],
+    "total_seconds": 255,
+    "steps": [
+      {
+        "step": 1,
+        "phase": "motivation",
+        "location": {
+          "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+          "line_range": [
+            21,
+            40
+          ],
+          "symbol": "CounterfactualSafesRepository"
+        },
+        "action": "open",
+        "narration": "Here is the problem this PR solves. When two users independently register the same counterfactual safe — same chain, same predicted address, same init params — the old code would hit a unique constraint and return a 409 conflict to the second user. That is wrong: both users have a legitimate claim to the same canonical safe row.",
+        "estimated_seconds": 15
+      },
+      {
+        "step": 2,
+        "phase": "motivation",
+        "location": {
+          "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+          "line_range": [
+            21,
+            40
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "The fix is a many-to-many junction table. One canonical row lives in counterfactual safes, and each user gets their own row in counterfactual safe users pointing at it. Let's see how that plays out across the codebase.",
+        "estimated_seconds": 13,
+        "diagram": {
+          "kind": "flowchart",
+          "title": "Before and after the junction table",
+          "mermaid": "flowchart LR\n  subgraph Before\n    UA[User A POST] --> CS1[(counterfactual_safes\ncreator_id = A)]\n    UB[User B POST] -->|409 Conflict| CS1\n  end\n  subgraph After\n    UC[User A POST] --> CS2[(counterfactual_safes\ncreator_id = A)]\n    UC --> JA[(cf_safe_users\nA x Safe)]\n    UD[User B POST\nmatching params] --> CS2\n    UD --> JB[(cf_safe_users\nB x Safe)]\n    UE[User B POST\nmismatched params] -->|409 Conflict| CS2\n  end"
+        }
+      },
+      {
+        "step": 3,
+        "phase": "change",
+        "location": {
+          "file": "migrations/1777636800000-create-counterfactual-safe-users.ts",
+          "line_range": [
+            4,
+            30
+          ],
+          "symbol": "CreateCounterfactualSafeUsers1777636800000"
+        },
+        "action": "open",
+        "narration": "The migration creates the counterfactual safe users table with foreign keys to both counterfactual safes and users, and a unique constraint on the pair so no duplicate associations can sneak in. It also wires up the update timestamp trigger that the rest of the schema already uses.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 4,
+        "phase": "change",
+        "location": {
+          "file": "migrations/1777636800000-create-counterfactual-safe-users.ts",
+          "line_range": [
+            31,
+            55
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "Right after creating the table, the migration backfills it. Every existing row in counterfactual safes that has a non-null creator id gets an association row inserted for that creator, using on conflict do nothing so the backfill is safe to re-run. The creator id column itself stays on the canonical table as an audit trail of who first registered the safe.",
+        "estimated_seconds": 15
+      },
+      {
+        "step": 5,
+        "phase": "change",
+        "location": {
+          "file": "src/modules/counterfactual-safes/datasources/entities/counterfactual-safe-user.entity.db.ts",
+          "line_range": [
+            13,
+            45
+          ],
+          "symbol": "CounterfactualSafeUser"
+        },
+        "action": "open",
+        "narration": "Here is the TypeORM entity that maps to that new table. It has two many-to-one relations — one to CounterfactualSafe and one to User — and a unique decorator covering both relation fields so the ORM enforces the same constraint at the application layer.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 6,
+        "phase": "change",
+        "location": {
+          "file": "src/modules/counterfactual-safes/counterfactual-safes.module.ts",
+          "line_range": [
+            17,
+            35
+          ],
+          "symbol": "CounterfactualSafesModule"
+        },
+        "action": "open",
+        "narration": "The module now registers CounterfactualSafeUser alongside CounterfactualSafe in the TypeORM feature list, which makes the junction repository injectable. Without this line the new entity would be invisible to the dependency injection container.",
+        "callouts": [
+          {
+            "file": "src/modules/counterfactual-safes/datasources/entities/counterfactual-safe-user.entity.db.ts",
+            "line": 13,
+            "note": "entity registered here"
+          }
+        ],
+        "estimated_seconds": 12
+      },
+      {
+        "step": 7,
+        "phase": "change",
+        "location": {
+          "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+          "line_range": [
+            21,
+            50
+          ],
+          "symbol": "CounterfactualSafesRepository"
+        },
+        "action": "open",
+        "narration": "Now the heart of the PR: the repository rewrite. The constructor now injects a second TypeORM repository for CounterfactualSafeUser alongside the existing one for CounterfactualSafe. Everything else flows from that second injection.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 8,
+        "phase": "change",
+        "location": {
+          "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+          "line_range": [
+            51,
+            100
+          ],
+          "symbol": "CounterfactualSafesRepository"
+        },
+        "action": "scroll-to",
+        "narration": "The create method now runs inside a transaction. It first does a find-one lookup for an existing row matching chain and address. If one exists and the init params match exactly, it skips the insert and jumps straight to associating the current user. If the params differ, it throws a 409 conflict — that is the only remaining conflict case.",
+        "estimated_seconds": 15
+      },
+      {
+        "step": 9,
+        "phase": "change",
+        "location": {
+          "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+          "line_range": [
+            101,
+            130
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "The private associate user helper inserts a row into counterfactual safe users with or-ignore semantics, so if the calling user is already associated — say they re-submit the same safe — the insert is silently skipped and the operation returns cleanly. That is what makes the POST endpoint idempotent.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 10,
+        "phase": "change",
+        "location": {
+          "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+          "line_range": [
+            131,
+            165
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "Find by user id now joins through the junction table. It selects canonical safe rows where a matching junction row exists for the requesting user, so a user sees every safe they are associated with regardless of who first created it.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 11,
+        "phase": "change",
+        "location": {
+          "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+          "line_range": [
+            166,
+            200
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "Delete is now a soft unlink. It removes only the caller's row from counterfactual safe users and leaves the canonical safe row intact for any other users still associated with it. The old behavior would have deleted the canonical row outright, which would have broken other users' references.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 12,
+        "phase": "ripple",
+        "location": {
+          "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.interface.ts",
+          "line_range": [
+            15,
+            35
+          ],
+          "symbol": "ICounterfactualSafesRepository"
+        },
+        "action": "open",
+        "narration": "The repository interface reflects the rename: find by creator id is now find by user id, and the delete method's parameter object uses user id instead of creator id. Any other implementation of this interface — including mocks in tests — must be updated to match.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 13,
+        "phase": "ripple",
+        "location": {
+          "file": "src/modules/counterfactual-safes/routes/counterfactual-safes.service.ts",
+          "line_range": [
+            11,
+            45
+          ],
+          "symbol": "CounterfactualSafesService"
+        },
+        "action": "open",
+        "narration": "The service layer is a thin pass-through change. The calls to find by creator id and delete now pass user id instead of creator id, aligning with the renamed interface. The authenticated user identity comes from the same helper as before, so no auth logic changed.",
+        "callouts": [
+          {
+            "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.interface.ts",
+            "line": 15,
+            "note": "interface contract updated to userId"
+          }
+        ],
+        "estimated_seconds": 12
+      },
+      {
+        "step": 14,
+        "phase": "ripple",
+        "location": {
+          "file": "src/modules/counterfactual-safes/routes/__tests__/counterfactual-safes.controller.e2e-spec.ts",
+          "line_range": [
+            1,
+            40
+          ]
+        },
+        "action": "open",
+        "narration": "The end-to-end tests now cover three POST scenarios: same user re-submitting returns 201, a different user with matching params also returns 201 and can see the safe via GET, and a different user with mismatched params still gets 409. These replace the old single duplicate-conflict test.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 15,
+        "phase": "ripple",
+        "location": {
+          "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.integration.spec.ts",
+          "line_range": [
+            1,
+            50
+          ]
+        },
+        "action": "open",
+        "narration": "The integration spec adds CounterfactualSafeUser to the test data source and cleans up junction rows before canonical rows in after-each, respecting the foreign key order. New test cases cover two-user sharing, shared visibility after a second attach, and the delete-only-unlinks path against a real Postgres instance.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 16,
+        "phase": "risk",
+        "location": {
+          "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+          "line_range": [
+            51,
+            100
+          ]
+        },
+        "action": "flick-back",
+        "narration": "There is a time-of-check-to-time-of-use race in the create method. Two concurrent POSTs for the same chain and address can both pass the find-one check before either inserts, and the second insert will hit the database unique constraint rather than the application-level 409 path. The error surfaced to the caller may be a raw database error rather than the expected conflict response.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 17,
+        "phase": "risk",
+        "location": {
+          "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+          "line_range": [
+            101,
+            130
+          ]
+        },
+        "action": "scroll-to",
+        "narration": "The associate user helper uses or-ignore, which silently swallows all insert errors on the junction table — not just duplicate-key violations. A foreign key failure or schema mismatch would be swallowed too, making those bugs invisible at runtime. Worth a close look before merging.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 18,
+        "phase": "risk",
+        "location": {
+          "file": "migrations/1777636800000-create-counterfactual-safe-users.ts",
+          "line_range": [
+            55,
+            75
+          ]
+        },
+        "action": "flick-back",
+        "narration": "The down migration drops the junction table with cascade but does not restore any data. If this migration is rolled back after the application code is already deployed, the GET and DELETE endpoints will fail at runtime because they query a table that no longer exists. Plan the rollback window carefully.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 19,
+        "phase": "wrap",
+        "location": {
+          "file": "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts",
+          "line_range": [
+            21,
+            50
+          ],
+          "symbol": "CounterfactualSafesRepository"
+        },
+        "action": "flick-back",
+        "narration": "Bottom line: this PR turns counterfactual safe ownership from a single-creator lock into a shared association model, making the POST endpoint idempotent on matching params and letting DELETE cleanly unlink one user without disturbing others — a solid foundation for cross-space safe sharing.",
+        "estimated_seconds": 14
+      }
+    ]
+  },
+  "markdown": "# PR Briefing — #3055: feat: share counterfactual safes across users via junction table\n\n**Repo:** `safe-global/safe-client-gateway`  \n**Author:** katspaugh  \n**Branch:** `main` ← `fix/counterfactual-safes-shared-identity` (`6057d28`)  \n**URL:** https://github.com/safe-global/safe-client-gateway/pull/3055\n\n## Summary\n\nThis PR replaces the single-owner model for counterfactual safes with a many-to-many junction table (`counterfactual_safe_users`) so multiple users can share a single canonical `counterfactual_safes` row. A new migration creates the junction table, backfills associations from the existing `creator_id` column (which is retained for audit purposes), and the `CounterfactualSafesRepository` is rewritten to make `POST /v1/users/counterfactual-safes` idempotent on matching init params, returning 409 only when submitted params differ from the stored row. `GET` now queries through the junction table so users see all safes they are associated with, and `DELETE` removes only the caller's junction row rather than the canonical record. The `CounterfactualSafeUser` entity, module registration, service layer, interface, and e2e/integration tests are all updated to reflect the new semantics.\n\n## Architecture notes\n\nThe change introduces a `counterfactual_safe_users` junction table with FK references to `counterfactual_safes` and `users`, turning a one-to-many (creator→safe) relationship into many-to-many. The `CounterfactualSafesRepository.create` method now runs a find-then-insert transaction with `associateUser` using `orIgnore`, and `findByUserId` issues a raw-column JOIN against the junction table. The `CounterfactualSafesService` passes `userId` (not `creatorId`) to all repository calls. The migration is forward-only with a DROP TABLE down path, meaning a rollback after deployment would break GET and DELETE at runtime.\n\n## Ripple risks\n\nAnalyzed 4 changed exports. No untouched external callers found — all usages appear to be inside the PR diff.\n\n_Analyzed 8 file(s), 6 changed export(s), 0 uncovered callsite(s) in 1.9s._\n\n## Walkthrough outline\n\n_19 steps across 6 chapters, approximately 4 min 15s._\n\n### Why this change\n\n1. **motivation** · `src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts` L21-40 `CounterfactualSafesRepository`\n   Here is the problem this PR solves. When two users independently register the same counterfactual safe — same chain, same predicted address, same init params — the old code would hit a unique constraint and return a 409 conflict to the second user. That is wrong: both users have a legitimate claim to the same canonical safe row.\n\n2. **motivation** · `src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts` L21-40\n   The fix is a many-to-many junction table. One canonical row lives in counterfactual safes, and each user gets their own row in counterfactual safe users pointing at it. Let's see how that plays out across the codebase.\n\n### The junction table foundation\n\n3. **change** · `migrations/1777636800000-create-counterfactual-safe-users.ts` L4-30 `CreateCounterfactualSafeUsers1777636800000`\n   The migration creates the counterfactual safe users table with foreign keys to both counterfactual safes and users, and a unique constraint on the pair so no duplicate associations can sneak in. It also wires up the update timestamp trigger that the rest of the schema already uses.\n\n4. **change** · `migrations/1777636800000-create-counterfactual-safe-users.ts` L31-55\n   Right after creating the table, the migration backfills it. Every existing row in counterfactual safes that has a non-null creator id gets an association row inserted for that creator, using on conflict do nothing so the backfill is safe to re-run. The creator id column itself stays on the canonical table as an audit trail of who first registered the safe.\n\n5. **change** · `src/modules/counterfactual-safes/datasources/entities/counterfactual-safe-user.entity.db.ts` L13-45 `CounterfactualSafeUser`\n   Here is the TypeORM entity that maps to that new table. It has two many-to-one relations — one to CounterfactualSafe and one to User — and a unique decorator covering both relation fields so the ORM enforces the same constraint at the application layer.\n\n6. **change** · `src/modules/counterfactual-safes/counterfactual-safes.module.ts` L17-35 `CounterfactualSafesModule`\n   The module now registers CounterfactualSafeUser alongside CounterfactualSafe in the TypeORM feature list, which makes the junction repository injectable. Without this line the new entity would be invisible to the dependency injection container.\n\n### Rewriting the repository\n\n7. **change** · `src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts` L21-50 `CounterfactualSafesRepository`\n   Now the heart of the PR: the repository rewrite. The constructor now injects a second TypeORM repository for CounterfactualSafeUser alongside the existing one for CounterfactualSafe. Everything else flows from that second injection.\n\n8. **change** · `src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts` L51-100 `CounterfactualSafesRepository`\n   The create method now runs inside a transaction. It first does a find-one lookup for an existing row matching chain and address. If one exists and the init params match exactly, it skips the insert and jumps straight to associating the current user. If the params differ, it throws a 409 conflict — that is the only remaining conflict case.\n\n9. **change** · `src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts` L101-130\n   The private associate user helper inserts a row into counterfactual safe users with or-ignore semantics, so if the calling user is already associated — say they re-submit the same safe — the insert is silently skipped and the operation returns cleanly. That is what makes the POST endpoint idempotent.\n\n10. **change** · `src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts` L131-165\n   Find by user id now joins through the junction table. It selects canonical safe rows where a matching junction row exists for the requesting user, so a user sees every safe they are associated with regardless of who first created it.\n\n11. **change** · `src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts` L166-200\n   Delete is now a soft unlink. It removes only the caller's row from counterfactual safe users and leaves the canonical safe row intact for any other users still associated with it. The old behavior would have deleted the canonical row outright, which would have broken other users' references.\n\n### Consumers that had to adapt\n\n12. **ripple** · `src/modules/counterfactual-safes/domain/counterfactual-safes.repository.interface.ts` L15-35 `ICounterfactualSafesRepository`\n   The repository interface reflects the rename: find by creator id is now find by user id, and the delete method's parameter object uses user id instead of creator id. Any other implementation of this interface — including mocks in tests — must be updated to match.\n\n13. **ripple** · `src/modules/counterfactual-safes/routes/counterfactual-safes.service.ts` L11-45 `CounterfactualSafesService`\n   The service layer is a thin pass-through change. The calls to find by creator id and delete now pass user id instead of creator id, aligning with the renamed interface. The authenticated user identity comes from the same helper as before, so no auth logic changed.\n\n14. **ripple** · `src/modules/counterfactual-safes/routes/__tests__/counterfactual-safes.controller.e2e-spec.ts` L1-40\n   The end-to-end tests now cover three POST scenarios: same user re-submitting returns 201, a different user with matching params also returns 201 and can see the safe via GET, and a different user with mismatched params still gets 409. These replace the old single duplicate-conflict test.\n\n15. **ripple** · `src/modules/counterfactual-safes/domain/counterfactual-safes.repository.integration.spec.ts` L1-50\n   The integration spec adds CounterfactualSafeUser to the test data source and cleans up junction rows before canonical rows in after-each, respecting the foreign key order. New test cases cover two-user sharing, shared visibility after a second attach, and the delete-only-unlinks path against a real Postgres instance.\n\n### What can go wrong\n\n16. **risk** · `src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts` L51-100\n   There is a time-of-check-to-time-of-use race in the create method. Two concurrent POSTs for the same chain and address can both pass the find-one check before either inserts, and the second insert will hit the database unique constraint rather than the application-level 409 path. The error surfaced to the caller may be a raw database error rather than the expected conflict response.\n\n17. **risk** · `src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts` L101-130\n   The associate user helper uses or-ignore, which silently swallows all insert errors on the junction table — not just duplicate-key violations. A foreign key failure or schema mismatch would be swallowed too, making those bugs invisible at runtime. Worth a close look before merging.\n\n18. **risk** · `migrations/1777636800000-create-counterfactual-safe-users.ts` L55-75\n   The down migration drops the junction table with cascade but does not restore any data. If this migration is rolled back after the application code is already deployed, the GET and DELETE endpoints will fail at runtime because they query a table that no longer exists. Plan the rollback window carefully.\n\n### The bottom line\n\n19. **wrap** · `src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts` L21-50 `CounterfactualSafesRepository`\n   Bottom line: this PR turns counterfactual safe ownership from a single-creator lock into a shared association model, making the POST endpoint idempotent on matching params and letting DELETE cleanly unlink one user without disturbing others — a solid foundation for cross-space safe sharing.\n\n## Reviewer checklist\n\n- [ ] Verify the `create` transaction is safe under concurrent POSTs for the same `(chainId, address)`: the non-locking `findOne` followed by `insert` has a TOCTOU race where two simultaneous requests can both miss the existing row and collide on the unique constraint, which is no longer caught by the error handler.\n- [ ] Confirm `isSameAddressList` (used in `isSameInitParams`) is order-insensitive or that the API contract guarantees owners are always submitted in a canonical order, since two registrations with the same owners in different order will currently produce a 409 conflict.\n- [ ] Check that `associateUser` using `orIgnore` does not silently swallow FK violations or other unexpected insert errors on `counterfactual_safe_users` beyond the intended duplicate-key case.\n- [ ] Ensure the `CounterfactualSafeUser` entity is registered in the global TypeORM entity list (e.g., `PostgresDatabaseModuleV2`) and not only in `CounterfactualSafesModule`, otherwise the table will be unknown to the ORM at runtime.\n- [ ] Validate the down migration is safe: dropping `counterfactual_safe_users` with CASCADE after the new application code is deployed will break GET and DELETE endpoints — confirm the rollback procedure includes a coordinated code revert.\n- [ ] Add or confirm e2e coverage for DELETE after two users share a safe (assert user1's association survives after user2 deletes), and verify GET for user1 still returns the safe after user2 attaches — both gaps are noted in the current test suite.\n\n## File-by-file\n\n### `migrations/1777636800000-create-counterfactual-safe-users.ts`\n\nAdds a new migration `CreateCounterfactualSafeUsers1777636800000` that creates the `counterfactual_safe_users` junction table with FK constraints to `counterfactual_safes` and `users`, an `updated_at` trigger, and backfills existing rows from `counterfactual_safes.creator_id`.\n\n_Enables multiple users to share a single canonical counterfactual safe row, replacing the implicit single-owner model with an explicit many-to-many association._\n\n**Risks:**\n- Backfill uses `ON CONFLICT DO NOTHING` — verify no valid associations are silently skipped if `creator_id` is non-null but duplicated across rows\n- Down migration drops the table with CASCADE but does not restore any data; if rolled back after the application code is deployed, GET/DELETE endpoints will break\n- No index on `counterfactual_safe_id` column — queries filtering by safe rather than user will do full scans; the unique constraint covers the pair but a dedicated index on `counterfactual_safe_id` alone may be needed\n- Timestamp `1777636800000` is in the future (May 2026); verify migration ordering is intentional and won't conflict with other pending migrations\n- The `update_updated_at` procedure is assumed to already exist — migration will fail if it doesn't; no guard or creation step is included\n\n### `src/modules/counterfactual-safes/counterfactual-safes.module.ts`\n\nImports `CounterfactualSafeUser` entity and registers it alongside `CounterfactualSafe` in `TypeOrmModule.forFeature` within `CounterfactualSafesModule`.\n\n_Makes the new junction table entity available for injection as a TypeORM repository within the module's providers._\n\n**Risks:**\n- Verify `CounterfactualSafeUser` entity is also registered in the database connection's entity list (e.g., PostgresDatabaseModuleV2 or ormconfig), otherwise TypeORM won't recognize the table.\n- Check that no other module independently registers `CounterfactualSafeUser` causing duplicate repository conflicts.\n\n### `src/modules/counterfactual-safes/datasources/entities/counterfactual-safe-user.entity.db.ts`\n\nNew TypeORM entity `CounterfactualSafeUser` added for the `counterfactual_safe_users` junction table, with `ManyToOne` relations to `CounterfactualSafe` and `User`, a unique constraint on `(counterfactualSafe, user)`, and `createdAt`/`updatedAt` timestamp columns.\n\n_This junction table enables multiple users to share a single canonical counterfactual safe row, replacing the previous single-owner model._\n\n**Risks:**\n- updatedAt has `update: false` so it will never be updated after insert — likely intentional but should be confirmed\n- The `@Unique` decorator references relation objects `['counterfactualSafe', 'user']` rather than column names `['counterfactual_safe_id', 'user_id']` — verify TypeORM resolves this correctly to the FK columns\n- No `updated_at` trigger or auto-update mechanism exists; if audit trail of changes is needed this is insufficient\n- CounterfactualSafe entity needs a corresponding `OneToMany` back-reference or the relation target `counterfactualSafe.id` used in ManyToOne callback is misleading\n\n### `src/modules/counterfactual-safes/domain/counterfactual-safes.repository.integration.spec.ts`\n\nIntegration tests for `CounterfactualSafesRepository` are updated to cover the new junction-table model: `CounterfactualSafeUser` entity is added to the test data source, `afterEach` cleanup deletes junction rows first, `findByCreatorId` tests are renamed/rewritten to `findByUserId`, and new test cases cover idempotent re-submission, cross-user sharing, and delete-only-unlinks semantics.\n\n_The tests validate that the repository's new shared-identity behavior (idempotent create, junction-based visibility, association-only delete) works correctly against a real Postgres schema including the new migration._\n\n**Risks:**\n- Delete test 'should remove the user association and the canonical row when no other associations remain' asserts canonical row is kept (length 1) but the comment says 'intentionally kept (audit trail)' — verify this matches the actual repository implementation and is not a test bug masking a missing cascade delete\n- afterEach cleanup deletes junction rows before canonical rows; if FK constraints are DEFERRABLE or cascade is set differently, order may not matter, but confirm the migration's FK definition matches this assumed dependency order\n- The 'should throw UniqueConstraintError when (chainId, address) collides with different init params' test uses two different users — confirm the repository actually compares init params and throws UniqueConstraintError (not a raw DB constraint error) when params differ\n- No test verifies that `findByUserId` does NOT return safes the user has no association with (only the 'empty array' case covers a user with zero associations, not a user who exists but is unassociated with a specific safe that exists)\n- The 'delete multiple associations' test only checks junction rows are empty but does not assert canonical rows still exist, potentially missing a regression if delete accidentally cascades\n\n### `src/modules/counterfactual-safes/domain/counterfactual-safes.repository.interface.ts`\n\nRenamed `creatorId` to `userId` in two interface method signatures: `findByCreatorId` (renamed to `findByUserId`) and the `delete` method's parameter object.\n\n_Reflects the shift from creator-only ownership to shared user associations via the junction table, ensuring the interface contract matches the new multi-user semantics._\n\n**Risks:**\n- Verify all implementations of ICounterfactualSafesRepository are updated to match the renamed method and parameter\n- Check that no callers still pass `creatorId` as a named property to `delete` — structural typing could silently accept the old shape if the field name wasn't enforced\n- Confirm `findByCreatorId` is fully removed/replaced and not still referenced anywhere under the old name\n\n### `src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts`\n\nRewrites `CounterfactualSafesRepository`: `create` now runs inside a transaction that upserts via find-then-insert and calls `associateUser` (inserting into `CounterfactualSafeUser` with `orIgnore`); `findByCreatorId` is renamed `findByUserId` and queries through the junction table; `delete` now removes only the caller's `CounterfactualSafeUser` row rather than the canonical `CounterfactualSafe` row.\n\n_Enables multiple users to share a single canonical counterfactual safe row, making POST idempotent on matching init params and returning 409 only on param mismatch, while DELETE becomes a soft-unlink that preserves the row for other users._\n\n**Risks:**\n- isSameInitParams does a strict string equality on owners array elements but `create` normalizes incoming owners via getAddress while the stored row may have been inserted before normalization — verify the DB always stores checksummed addresses\n- isSameAddressList is order-sensitive; two registrations with the same owners in different order will be treated as mismatched params and throw 409\n- The transaction in `create` does a non-locking `findOne` then `insert`, creating a TOCTOU race: two concurrent POSTs for the same (chainId, address) can both see no existing row and both attempt insert, causing a DB unique-constraint error that is no longer caught\n- delete builds a dynamic OR clause with positional parameter names (chainId0, address0, …); if args.payload is empty the WHERE clause is an empty string which is invalid SQL — no guard against empty payload\n- associateUser uses `orIgnore` which silently swallows all insert errors on CounterfactualSafeUser, not just duplicate-key; any FK violation or schema error will be silently ignored\n- findByUserId uses a raw column name string 'cfsu.counterfactual_safe_id = cfs.id' and 'cfsu.user_id' — these must exactly match the DB column names; a mismatch will fail at runtime rather than compile time\n- The old `delete` path called `findOrFail` which threw NotFoundException; the new path also throws NotFoundException but only checks junction rows — a user who was never associated but requests deletion of a valid CF safe will get NotFoundException rather than a more descriptive error\n\n### `src/modules/counterfactual-safes/routes/__tests__/counterfactual-safes.controller.e2e-spec.ts`\n\nReplaces the 'duplicate chainId+address → 409' test with three new e2e tests: same-user idempotent re-submit returns 201, different-user with mismatched init params returns 409, and different-user with matching init params returns 201 and is visible via GET. Also renames the delete test description and casts `cfSafe.chainId` to `string` to fix TypeScript indexing.\n\n_Validates the new shared-identity semantics end-to-end: idempotent writes, conflict only on param mismatch, and cross-user visibility through the junction table._\n\n**Risks:**\n- The 'second user attach' test only checks getResponse.body.safes[cfSafe.chainId].length === 1 for user2, but does not verify user1 still sees the safe — regression in user1 visibility is untested here\n- No test covers DELETE behavior after two users share a safe (i.e., that deleting user2's association leaves user1's intact)\n- The idempotent re-submit test uses the same user/token for both POSTs but does not assert the response body or that no duplicate row was created\n- wallet creation requests (POST /v1/users/wallet) are not awaited with .expect(), so failures there would be silently swallowed\n\n### `src/modules/counterfactual-safes/routes/counterfactual-safes.service.ts`\n\nRenames the parameter passed to `findByCreatorId` (now `findByUserId`) and `delete` from `creatorId: userId` to `userId` in `CounterfactualSafesService`, aligning the service layer with the new junction-table-based repository methods.\n\n_Ensures GET and DELETE operations query/remove by the authenticated user's junction-table association rather than the legacy `creator_id` column, enabling shared counterfactual safe visibility and non-destructive unlink on delete._\n\n**Risks:**\n- Verify `findByUserId` in the repository actually queries the junction table and not just a renamed `creator_id` filter\n- Confirm `delete` in the repository only removes the junction row and does not cascade-delete the canonical `counterfactual_safes` row\n- Check that `getAuthenticatedUserIdOrFail` still returns the correct user identity after the junction-table migration\n\n---\n_Generated by prbrief • model: claude-sonnet-4-6 • 10 LLM calls • $0.19 • 88.6s_",
+  "files": {
+    "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport { PostgresDatabaseService } from '@/datasources/db/v2/postgres-database.service';\nimport { UniqueConstraintError } from '@/datasources/errors/unique-constraint-error';\nimport { CounterfactualSafe } from '@/modules/counterfactual-safes/datasources/entities/counterfactual-safe.entity.db';\nimport { CounterfactualSafeUser } from '@/modules/counterfactual-safes/datasources/entities/counterfactual-safe-user.entity.db';\nimport { User } from '@/modules/users/datasources/entities/users.entity.db';\nimport type { ICounterfactualSafesRepository } from '@/modules/counterfactual-safes/domain/counterfactual-safes.repository.interface';\nimport { BadRequestException, Inject, NotFoundException } from '@nestjs/common';\nimport {\n  EntityManager,\n  FindOptionsRelations,\n  FindOptionsSelect,\n  FindOptionsWhere,\n} from 'typeorm';\nimport { getAddress, type Address } from 'viem';\n\ntype CreateItem = Parameters<\n  ICounterfactualSafesRepository['create']\n>[0]['payload'][number];\n\nexport class CounterfactualSafesRepository\n  implements ICounterfactualSafesRepository\n{\n  public constructor(\n    @Inject(PostgresDatabaseService)\n    private readonly postgresDatabaseService: PostgresDatabaseService,\n  ) {}\n\n  public async create(\n    args: Parameters<ICounterfactualSafesRepository['create']>[0],\n  ): Promise<void> {\n    const normalized = args.payload.map((item) => ({\n      ...item,\n      owners: item.owners.map((owner) => getAddress(owner)),\n    }));\n\n    await this.postgresDatabaseService.transaction(async (manager) => {\n      for (const item of normalized) {\n        const existing = await manager.findOne(CounterfactualSafe, {\n          where: { chainId: item.chainId, address: item.address },\n        });\n\n        let counterfactualSafeId: number;\n\n        if (existing) {\n          if (!isSameInitParams(existing, item)) {\n            throw new UniqueConstraintError(\n              'A counterfactual Safe with the same chainId and address already exists with different initialization parameters.',\n            );\n          }\n          counterfactualSafeId = existing.id;\n        } else {\n          const insertResult = await manager.insert(CounterfactualSafe, {\n            creator: args.creatorId ? { id: args.creatorId } : null,\n            chainId: item.chainId,\n            address: item.address,\n            factoryAddress: item.factoryAddress,\n            masterCopy: item.masterCopy,\n            saltNonce: item.saltNonce,\n            safeVersion: item.safeVersion,\n            threshold: item.threshold,\n            owners: item.owners,\n            fallbackHandler: item.fallbackHandler,\n            setupTo: item.setupTo,\n            setupData: item.setupData,\n            paymentToken: item.paymentToken,\n            payment: item.payment,\n            paymentReceiver: item.paymentReceiver,\n          });\n          counterfactualSafeId = insertResult.identifiers[0].id as number;\n        }\n\n        if (args.creatorId) {\n          await this.associateUser(manager, counterfactualSafeId, args.creatorId);\n        }\n      }\n    });\n  }\n\n  public async findByUserId(args: {\n    userId: User['id'];\n  }): Promise<Array<CounterfactualSafe>> {\n    const repository =\n      await this.postgresDatabaseService.getRepository(CounterfactualSafe);\n\n    return repository\n      .createQueryBuilder('cfs')\n      .innerJoin(\n        CounterfactualSafeUser,\n        'cfsu',\n        'cfsu.counterfactual_safe_id = cfs.id',\n      )\n      .where('cfsu.user_id = :userId', { userId: args.userId })\n      .getMany();\n  }\n\n  public async findOrFail(\n    args: Parameters<CounterfactualSafesRepository['find']>[0],\n  ): Promise<Array<CounterfactualSafe>> {\n    const results = await this.find(args);\n\n    if (results.length === 0) {\n      throw new NotFoundException('Counterfactual Safe not found.');\n    }\n\n    return results;\n  }\n\n  public async find(args: {\n    where:\n      | Array<FindOptionsWhere<CounterfactualSafe>>\n      | FindOptionsWhere<CounterfactualSafe>;\n    select?: FindOptionsSelect<CounterfactualSafe>;\n    relations?: FindOptionsRelations<CounterfactualSafe>;\n  }): Promise<Array<CounterfactualSafe>> {\n    const repository =\n      await this.postgresDatabaseService.getRepository(CounterfactualSafe);\n\n    return await repository.find(args);\n  }\n\n  public async delete(args: {\n    userId: User['id'];\n    payload: Array<{\n      chainId: CounterfactualSafe['chainId'];\n      address: CounterfactualSafe['address'];\n    }>;\n  }): Promise<void> {\n    await this.postgresDatabaseService.transaction(async (manager) => {\n      const targets = await manager\n        .createQueryBuilder(CounterfactualSafeUser, 'cfsu')\n        .innerJoin(\n          CounterfactualSafe,\n          'cfs',\n          'cfs.id = cfsu.counterfactual_safe_id',\n        )\n        .where('cfsu.user_id = :userId', { userId: args.userId })\n        .andWhere(\n          args.payload\n            .map(\n              (_, i) =>\n                `(cfs.chain_id = :chainId${i} AND cfs.address = :address${i})`,\n            )\n            .join(' OR '),\n          args.payload.reduce<Record<string, string>>((acc, item, i) => {\n            acc[`chainId${i}`] = item.chainId;\n            acc[`address${i}`] = item.address;\n            return acc;\n          }, {}),\n        )\n        .select(['cfsu.id'])\n        .getMany();\n\n      if (targets.length === 0) {\n        throw new NotFoundException('Counterfactual Safe not found.');\n      }\n\n      if (targets.length !== args.payload.length) {\n        throw new BadRequestException(\n          `Expected ${args.payload.length} counterfactual Safe(s) to delete, but found ${targets.length}.`,\n        );\n      }\n\n      await manager.delete(\n        CounterfactualSafeUser,\n        targets.map((t) => t.id),\n      );\n    });\n  }\n\n  private async associateUser(\n    manager: EntityManager,\n    counterfactualSafeId: number,\n    userId: User['id'],\n  ): Promise<void> {\n    await manager\n      .createQueryBuilder()\n      .insert()\n      .into(CounterfactualSafeUser)\n      .values({\n        counterfactualSafe: { id: counterfactualSafeId },\n        user: { id: userId },\n      })\n      .orIgnore()\n      .execute();\n  }\n}\n\nfunction isSameInitParams(\n  existing: CounterfactualSafe,\n  incoming: CreateItem,\n): boolean {\n  return (\n    existing.factoryAddress === incoming.factoryAddress &&\n    existing.masterCopy === incoming.masterCopy &&\n    existing.saltNonce === incoming.saltNonce &&\n    existing.safeVersion === incoming.safeVersion &&\n    existing.threshold === incoming.threshold &&\n    isSameAddressList(existing.owners, incoming.owners) &&\n    existing.fallbackHandler === incoming.fallbackHandler &&\n    existing.setupTo === incoming.setupTo &&\n    existing.setupData === incoming.setupData &&\n    existing.paymentToken === incoming.paymentToken &&\n    existing.payment === incoming.payment &&\n    existing.paymentReceiver === incoming.paymentReceiver\n  );\n}\n\nfunction isSameAddressList(\n  a: ReadonlyArray<Address>,\n  b: ReadonlyArray<Address>,\n): boolean {\n  if (a.length !== b.length) return false;\n  for (let i = 0; i < a.length; i++) {\n    if (a[i] !== b[i]) return false;\n  }\n  return true;\n}\n",
+    "migrations/1777636800000-create-counterfactual-safe-users.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport type { MigrationInterface, QueryRunner } from 'typeorm';\n\nexport class CreateCounterfactualSafeUsers1777636800000\n  implements MigrationInterface\n{\n  public async up(queryRunner: QueryRunner): Promise<void> {\n    await queryRunner.query(\n      `CREATE TABLE counterfactual_safe_users (\n        id SERIAL NOT NULL,\n        counterfactual_safe_id INTEGER NOT NULL,\n        user_id INTEGER NOT NULL,\n        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),\n        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),\n        CONSTRAINT PK_CFSU_id PRIMARY KEY (id),\n        CONSTRAINT UQ_CFSU_cf_safe_user UNIQUE (counterfactual_safe_id, user_id),\n        CONSTRAINT FK_CFSU_cf_safe_id FOREIGN KEY (counterfactual_safe_id) REFERENCES counterfactual_safes(id) ON DELETE CASCADE,\n        CONSTRAINT FK_CFSU_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE\n      );\n      CREATE INDEX IDX_CFSU_user_id ON counterfactual_safe_users(user_id);`,\n    );\n    await queryRunner.query(\n      `CREATE TRIGGER update_counterfactual_safe_users_updated_at\n        BEFORE UPDATE ON counterfactual_safe_users\n        FOR EACH ROW EXECUTE PROCEDURE update_updated_at();`,\n    );\n    await queryRunner.query(\n      `INSERT INTO counterfactual_safe_users (counterfactual_safe_id, user_id)\n        SELECT id, creator_id FROM counterfactual_safes\n        WHERE creator_id IS NOT NULL\n        ON CONFLICT DO NOTHING;`,\n    );\n  }\n\n  public async down(queryRunner: QueryRunner): Promise<void> {\n    await queryRunner.query(\n      `DROP TABLE IF EXISTS counterfactual_safe_users CASCADE;`,\n    );\n  }\n}\n",
+    "src/modules/counterfactual-safes/datasources/entities/counterfactual-safe-user.entity.db.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport { CounterfactualSafe } from '@/modules/counterfactual-safes/datasources/entities/counterfactual-safe.entity.db';\nimport { User } from '@/modules/users/datasources/entities/users.entity.db';\nimport {\n  Column,\n  Entity,\n  ManyToOne,\n  JoinColumn,\n  PrimaryGeneratedColumn,\n  Unique,\n} from 'typeorm';\n\n@Entity('counterfactual_safe_users')\n@Unique('UQ_CFSU_cf_safe_user', ['counterfactualSafe', 'user'])\nexport class CounterfactualSafeUser {\n  @PrimaryGeneratedColumn({\n    primaryKeyConstraintName: 'PK_CFSU_id',\n  })\n  public readonly id!: number;\n\n  @ManyToOne(\n    () => CounterfactualSafe,\n    (counterfactualSafe: CounterfactualSafe) => counterfactualSafe.id,\n    { onDelete: 'CASCADE', nullable: false },\n  )\n  @JoinColumn({\n    name: 'counterfactual_safe_id',\n    foreignKeyConstraintName: 'FK_CFSU_cf_safe_id',\n  })\n  public readonly counterfactualSafe!: CounterfactualSafe;\n\n  @ManyToOne(() => User, (user: User) => user.id, {\n    onDelete: 'CASCADE',\n    nullable: false,\n  })\n  @JoinColumn({\n    name: 'user_id',\n    foreignKeyConstraintName: 'FK_CFSU_user_id',\n  })\n  public readonly user!: User;\n\n  @Column({\n    name: 'created_at',\n    type: 'timestamp with time zone',\n    default: () => 'CURRENT_TIMESTAMP',\n    update: false,\n  })\n  public readonly createdAt!: Date;\n\n  @Column({\n    name: 'updated_at',\n    type: 'timestamp with time zone',\n    default: () => 'CURRENT_TIMESTAMP',\n    update: false,\n  })\n  public readonly updatedAt!: Date;\n}\n",
+    "src/modules/counterfactual-safes/counterfactual-safes.module.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport { AuthModule } from '@/modules/auth/auth.module';\nimport { UsersModule } from '@/modules/users/users.module';\nimport { SpacesModule } from '@/modules/spaces/spaces.module';\nimport { PostgresDatabaseModuleV2 } from '@/datasources/db/v2/postgres-database.module';\nimport { CounterfactualSafe } from '@/modules/counterfactual-safes/datasources/entities/counterfactual-safe.entity.db';\nimport { CounterfactualSafeUser } from '@/modules/counterfactual-safes/datasources/entities/counterfactual-safe-user.entity.db';\nimport { CounterfactualSafesRepository } from '@/modules/counterfactual-safes/domain/counterfactual-safes.repository';\nimport { ICounterfactualSafesRepository } from '@/modules/counterfactual-safes/domain/counterfactual-safes.repository.interface';\nimport { CounterfactualSafesController } from '@/modules/counterfactual-safes/routes/counterfactual-safes.controller';\nimport { CounterfactualSafesService } from '@/modules/counterfactual-safes/routes/counterfactual-safes.service';\nimport { SpaceCounterfactualSafesController } from '@/modules/counterfactual-safes/routes/space-counterfactual-safes.controller';\nimport { SpaceCounterfactualSafesService } from '@/modules/counterfactual-safes/routes/space-counterfactual-safes.service';\nimport { Module, forwardRef } from '@nestjs/common';\nimport { TypeOrmModule } from '@nestjs/typeorm';\n\n@Module({\n  imports: [\n    PostgresDatabaseModuleV2,\n    TypeOrmModule.forFeature([CounterfactualSafe, CounterfactualSafeUser]),\n    forwardRef(() => AuthModule),\n    forwardRef(() => UsersModule),\n    forwardRef(() => SpacesModule),\n  ],\n  controllers: [\n    CounterfactualSafesController,\n    SpaceCounterfactualSafesController,\n  ],\n  providers: [\n    CounterfactualSafesService,\n    SpaceCounterfactualSafesService,\n    {\n      provide: ICounterfactualSafesRepository,\n      useClass: CounterfactualSafesRepository,\n    },\n  ],\n  exports: [ICounterfactualSafesRepository],\n})\nexport class CounterfactualSafesModule {}\n",
+    "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.interface.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport type { CounterfactualSafe } from '@/modules/counterfactual-safes/datasources/entities/counterfactual-safe.entity.db';\nimport type { User } from '@/modules/users/datasources/entities/users.entity.db';\nimport type { CounterfactualSafesRepository } from '@/modules/counterfactual-safes/domain/counterfactual-safes.repository';\nimport type {\n  FindOptionsRelations,\n  FindOptionsSelect,\n  FindOptionsWhere,\n} from 'typeorm';\n\nexport const ICounterfactualSafesRepository = Symbol(\n  'ICounterfactualSafesRepository',\n);\n\nexport interface ICounterfactualSafesRepository {\n  create(args: {\n    creatorId: User['id'] | null;\n    payload: Array<\n      Pick<\n        CounterfactualSafe,\n        | 'chainId'\n        | 'address'\n        | 'factoryAddress'\n        | 'masterCopy'\n        | 'saltNonce'\n        | 'safeVersion'\n        | 'threshold'\n        | 'owners'\n        | 'fallbackHandler'\n        | 'setupTo'\n        | 'setupData'\n        | 'paymentToken'\n        | 'payment'\n        | 'paymentReceiver'\n      >\n    >;\n  }): Promise<void>;\n\n  findByUserId(args: {\n    userId: User['id'];\n  }): Promise<Array<CounterfactualSafe>>;\n\n  findOrFail(\n    args: Parameters<CounterfactualSafesRepository['find']>[0],\n  ): Promise<Array<CounterfactualSafe>>;\n\n  find(args: {\n    where:\n      | Array<FindOptionsWhere<CounterfactualSafe>>\n      | FindOptionsWhere<CounterfactualSafe>;\n    select?: FindOptionsSelect<CounterfactualSafe>;\n    relations?: FindOptionsRelations<CounterfactualSafe>;\n  }): Promise<Array<CounterfactualSafe>>;\n\n  delete(args: {\n    userId: User['id'];\n    payload: Array<{\n      chainId: CounterfactualSafe['chainId'];\n      address: CounterfactualSafe['address'];\n    }>;\n  }): Promise<void>;\n}\n",
+    "src/modules/counterfactual-safes/routes/counterfactual-safes.service.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport { AuthPayload } from '@/modules/auth/domain/entities/auth-payload.entity';\nimport { getAuthenticatedUserIdOrFail } from '@/modules/auth/utils/assert-authenticated.utils';\nimport { ICounterfactualSafesRepository } from '@/modules/counterfactual-safes/domain/counterfactual-safes.repository.interface';\nimport { CreateCounterfactualSafeDto } from '@/modules/counterfactual-safes/routes/entities/create-counterfactual-safe.dto.entity';\nimport { DeleteCounterfactualSafeDto } from '@/modules/counterfactual-safes/routes/entities/delete-counterfactual-safe.dto.entity';\nimport { GetCounterfactualSafesResponse } from '@/modules/counterfactual-safes/routes/entities/get-counterfactual-safe.dto.entity';\nimport { transformCounterfactualSafesResponse } from '@/modules/counterfactual-safes/routes/counterfactual-safes.utils';\nimport { Inject, Injectable } from '@nestjs/common';\n\n@Injectable()\nexport class CounterfactualSafesService {\n  public constructor(\n    @Inject(ICounterfactualSafesRepository)\n    private readonly counterfactualSafesRepository: ICounterfactualSafesRepository,\n  ) {}\n\n  public async create(args: {\n    authPayload: AuthPayload;\n    payload: Array<CreateCounterfactualSafeDto>;\n  }): Promise<void> {\n    const userId = getAuthenticatedUserIdOrFail(args.authPayload);\n\n    return await this.counterfactualSafesRepository.create({\n      creatorId: userId,\n      payload: args.payload.map((item) => ({\n        chainId: item.chainId,\n        address: item.address,\n        factoryAddress: item.factoryAddress,\n        masterCopy: item.masterCopy,\n        saltNonce: item.saltNonce,\n        safeVersion: item.safeVersion,\n        threshold: item.threshold,\n        owners: item.owners,\n        fallbackHandler: item.fallbackHandler ?? null,\n        setupTo: item.to ?? null,\n        setupData: item.data,\n        paymentToken: item.paymentToken ?? null,\n        payment: item.payment ?? null,\n        paymentReceiver: item.paymentReceiver ?? null,\n      })),\n    });\n  }\n\n  public async get(\n    authPayload: AuthPayload,\n  ): Promise<GetCounterfactualSafesResponse> {\n    const userId = getAuthenticatedUserIdOrFail(authPayload);\n\n    const counterfactualSafes =\n      await this.counterfactualSafesRepository.findByUserId({\n        userId,\n      });\n\n    return {\n      safes: transformCounterfactualSafesResponse(counterfactualSafes),\n    };\n  }\n\n  public async delete(args: {\n    authPayload: AuthPayload;\n    payload: Array<DeleteCounterfactualSafeDto>;\n  }): Promise<void> {\n    const userId = getAuthenticatedUserIdOrFail(args.authPayload);\n\n    await this.counterfactualSafesRepository.delete({\n      userId,\n      payload: args.payload,\n    });\n  }\n}\n",
+    "src/modules/counterfactual-safes/routes/__tests__/counterfactual-safes.controller.e2e-spec.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport { type Server } from 'http';\nimport request from 'supertest';\nimport type { INestApplication } from '@nestjs/common';\nimport { TestAppProvider } from '@/__tests__/test-app.provider';\nimport configuration from '@/config/entities/__tests__/configuration';\nimport { IJwtService } from '@/datasources/jwt/jwt.service.interface';\nimport { NotificationsRepositoryV2Module } from '@/modules/notifications/domain/v2/notifications.repository.module';\nimport { TestNotificationsRepositoryV2Module } from '@/modules/notifications/domain/v2/test.notification.repository.module';\nimport { CounterfactualSafesController } from '@/modules/counterfactual-safes/routes/counterfactual-safes.controller';\nimport { checkGuardIsApplied } from '@/__tests__/util/check-guard';\nimport { AuthGuard } from '@/modules/auth/routes/guards/auth.guard';\nimport { siweAuthPayloadDtoBuilder } from '@/modules/auth/domain/entities/__tests__/auth-payload-dto.entity.builder';\nimport { faker } from '@faker-js/faker/.';\nimport { getAddress } from 'viem';\nimport { chainBuilder } from '@/modules/chains/domain/entities/__tests__/chain.builder';\nimport { counterfactualSafeBuilder } from '@/modules/counterfactual-safes/datasources/entities/__tests__/counterfactual-safe.entity.db.builder';\nimport { createTestModule } from '@/__tests__/testing-module';\n\nfunction buildCounterfactualSafe(chainId?: string): Record<string, unknown> {\n  const cfSafe = counterfactualSafeBuilder()\n    .with('chainId', chainId ?? chainBuilder().build().chainId)\n    .build();\n  return {\n    chainId: cfSafe.chainId,\n    address: cfSafe.address,\n    factoryAddress: cfSafe.factoryAddress,\n    masterCopy: cfSafe.masterCopy,\n    saltNonce: cfSafe.saltNonce,\n    safeVersion: cfSafe.safeVersion,\n    threshold: cfSafe.threshold,\n    owners: cfSafe.owners,\n    fallbackHandler: cfSafe.fallbackHandler,\n    to: cfSafe.setupTo,\n    data: cfSafe.setupData,\n    paymentToken: cfSafe.paymentToken,\n    payment: cfSafe.payment,\n    paymentReceiver: cfSafe.paymentReceiver,\n  };\n}\n\ndescribe('CounterfactualSafesController', () => {\n  let app: INestApplication<Server>;\n  let jwtService: IJwtService;\n\n  beforeAll(async () => {\n    jest.resetAllMocks();\n\n    const defaultConfiguration = configuration();\n    const testConfiguration = (): typeof defaultConfiguration => ({\n      ...defaultConfiguration,\n      features: {\n        ...defaultConfiguration.features,\n        auth: true,\n        users: true,\n      },\n    });\n\n    const moduleFixture = await createTestModule({\n      config: testConfiguration,\n      overridePostgresV2: false,\n      modules: [\n        {\n          originalModule: NotificationsRepositoryV2Module,\n          testModule: TestNotificationsRepositoryV2Module,\n        },\n      ],\n    });\n\n    jwtService = moduleFixture.get<IJwtService>(IJwtService);\n\n    app = await new TestAppProvider().provide(moduleFixture);\n    await app.init();\n  });\n\n  afterAll(async () => {\n    await app.close();\n  });\n\n  it('should require authentication for every endpoint', () => {\n    const endpoints = Object.values(\n      CounterfactualSafesController.prototype,\n      // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type\n    ) as Array<Function>;\n\n    endpoints.forEach((fn) => checkGuardIsApplied(AuthGuard, fn));\n  });\n\n  describe('POST /v1/users/counterfactual-safes', () => {\n    it('Should create a counterfactual safe', async () => {\n      const authPayloadDto = siweAuthPayloadDtoBuilder().build();\n      const accessToken = jwtService.sign(authPayloadDto);\n      const cfSafe = buildCounterfactualSafe();\n\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken}`]);\n\n      await request(app.getHttpServer())\n        .post('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken}`])\n        .send({ safes: [cfSafe] })\n        .expect(201);\n    });\n\n    it('Should create multiple counterfactual safes', async () => {\n      const authPayloadDto = siweAuthPayloadDtoBuilder().build();\n      const accessToken = jwtService.sign(authPayloadDto);\n      const cfSafe1 = buildCounterfactualSafe();\n      const cfSafe2 = buildCounterfactualSafe();\n\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken}`]);\n\n      await request(app.getHttpServer())\n        .post('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken}`])\n        .send({ safes: [cfSafe1, cfSafe2] })\n        .expect(201);\n    });\n\n    it('Should be idempotent when the same user re-submits identical init params', async () => {\n      const authPayloadDto = siweAuthPayloadDtoBuilder().build();\n      const accessToken = jwtService.sign(authPayloadDto);\n      const cfSafe = buildCounterfactualSafe();\n\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken}`]);\n\n      await request(app.getHttpServer())\n        .post('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken}`])\n        .send({ safes: [cfSafe] })\n        .expect(201);\n\n      await request(app.getHttpServer())\n        .post('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken}`])\n        .send({ safes: [cfSafe] })\n        .expect(201);\n    });\n\n    it('Should return 409 when (chainId, address) collides with different init params', async () => {\n      const authPayloadDto1 = siweAuthPayloadDtoBuilder().build();\n      const accessToken1 = jwtService.sign(authPayloadDto1);\n      const authPayloadDto2 = siweAuthPayloadDtoBuilder().build();\n      const accessToken2 = jwtService.sign(authPayloadDto2);\n      const cfSafe = buildCounterfactualSafe();\n\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken1}`]);\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken2}`]);\n\n      await request(app.getHttpServer())\n        .post('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken1}`])\n        .send({ safes: [cfSafe] })\n        .expect(201);\n\n      await request(app.getHttpServer())\n        .post('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken2}`])\n        .send({\n          safes: [{ ...cfSafe, threshold: (cfSafe.threshold as number) + 1 }],\n        })\n        .expect(409);\n    });\n\n    it('Should allow a second user to attach to an existing counterfactual safe with matching init params', async () => {\n      const authPayloadDto1 = siweAuthPayloadDtoBuilder().build();\n      const accessToken1 = jwtService.sign(authPayloadDto1);\n      const authPayloadDto2 = siweAuthPayloadDtoBuilder().build();\n      const accessToken2 = jwtService.sign(authPayloadDto2);\n      const cfSafe = buildCounterfactualSafe();\n\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken1}`]);\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken2}`]);\n\n      await request(app.getHttpServer())\n        .post('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken1}`])\n        .send({ safes: [cfSafe] })\n        .expect(201);\n\n      await request(app.getHttpServer())\n        .post('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken2}`])\n        .send({ safes: [cfSafe] })\n        .expect(201);\n\n      const getResponse = await request(app.getHttpServer())\n        .get('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken2}`])\n        .expect(200);\n\n      expect(getResponse.body.safes[cfSafe.chainId as string]).toHaveLength(1);\n    });\n\n    it('Should return 422 for invalid data (non-hex data field)', async () => {\n      const authPayloadDto = siweAuthPayloadDtoBuilder().build();\n      const accessToken = jwtService.sign(authPayloadDto);\n      const cfSafe = { ...buildCounterfactualSafe(), data: 'not-hex' };\n\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken}`]);\n\n      await request(app.getHttpServer())\n        .post('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken}`])\n        .send({ safes: [cfSafe] })\n        .expect(422);\n    });\n\n    it('Should return 422 for invalid saltNonce', async () => {\n      const authPayloadDto = siweAuthPayloadDtoBuilder().build();\n      const accessToken = jwtService.sign(authPayloadDto);\n      const cfSafe = {\n        ...buildCounterfactualSafe(),\n        saltNonce: 'not-numeric',\n      };\n\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken}`]);\n\n      await request(app.getHttpServer())\n        .post('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken}`])\n        .send({ safes: [cfSafe] })\n        .expect(422);\n    });\n\n    it('Should return 422 for empty safes array', async () => {\n      const authPayloadDto = siweAuthPayloadDtoBuilder().build();\n      const accessToken = jwtService.sign(authPayloadDto);\n\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken}`]);\n\n      await request(app.getHttpServer())\n        .post('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken}`])\n        .send({ safes: [] })\n        .expect(422);\n    });\n\n    it('Should return 403 if not authenticated', async () => {\n      const cfSafe = buildCounterfactualSafe();\n\n      await request(app.getHttpServer())\n        .post('/v1/users/counterfactual-safes')\n        .send({ safes: [cfSafe] })\n        .expect(403);\n    });\n  });\n\n  describe('GET /v1/users/counterfactual-safes', () => {\n    it('Should return counterfactual safes grouped by chainId', async () => {\n      const authPayloadDto = siweAuthPayloadDtoBuilder().build();\n      const accessToken = jwtService.sign(authPayloadDto);\n      const cfSafe = buildCounterfactualSafe();\n\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken}`]);\n\n      await request(app.getHttpServer())\n        .post('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken}`])\n        .send({ safes: [cfSafe] })\n        .expect(201);\n\n      const getResponse = await request(app.getHttpServer())\n        .get('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken}`])\n        .expect(200);\n\n      const chainId = cfSafe.chainId as string;\n      expect(getResponse.body.safes).toBeDefined();\n      expect(getResponse.body.safes[chainId]).toBeDefined();\n      expect(getResponse.body.safes[chainId]).toHaveLength(1);\n      expect(getResponse.body.safes[chainId][0]).toMatchObject({\n        address: cfSafe.address,\n        factoryAddress: cfSafe.factoryAddress,\n        masterCopy: cfSafe.masterCopy,\n        saltNonce: cfSafe.saltNonce,\n        safeVersion: cfSafe.safeVersion,\n        threshold: cfSafe.threshold,\n        owners: cfSafe.owners,\n        fallbackHandler: cfSafe.fallbackHandler,\n        to: cfSafe.to,\n        data: cfSafe.data,\n        paymentReceiver: cfSafe.paymentReceiver,\n      });\n    });\n\n    it('Should return empty safes for a user with none', async () => {\n      const authPayloadDto = siweAuthPayloadDtoBuilder().build();\n      const accessToken = jwtService.sign(authPayloadDto);\n\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken}`]);\n\n      const getResponse = await request(app.getHttpServer())\n        .get('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken}`])\n        .expect(200);\n\n      expect(getResponse.body.safes).toEqual({});\n    });\n\n    it('Should not return safes created by another user', async () => {\n      const authPayloadDto1 = siweAuthPayloadDtoBuilder().build();\n      const accessToken1 = jwtService.sign(authPayloadDto1);\n      const authPayloadDto2 = siweAuthPayloadDtoBuilder().build();\n      const accessToken2 = jwtService.sign(authPayloadDto2);\n      const cfSafe = buildCounterfactualSafe();\n\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken1}`]);\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken2}`]);\n\n      await request(app.getHttpServer())\n        .post('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken1}`])\n        .send({ safes: [cfSafe] })\n        .expect(201);\n\n      const getResponse = await request(app.getHttpServer())\n        .get('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken2}`])\n        .expect(200);\n\n      expect(getResponse.body.safes).toEqual({});\n    });\n\n    it('Should return 403 if not authenticated', async () => {\n      await request(app.getHttpServer())\n        .get('/v1/users/counterfactual-safes')\n        .expect(403);\n    });\n  });\n\n  describe('DELETE /v1/users/counterfactual-safes', () => {\n    it('Should delete a counterfactual safe', async () => {\n      const authPayloadDto = siweAuthPayloadDtoBuilder().build();\n      const accessToken = jwtService.sign(authPayloadDto);\n      const cfSafe = buildCounterfactualSafe();\n\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken}`]);\n\n      await request(app.getHttpServer())\n        .post('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken}`])\n        .send({ safes: [cfSafe] })\n        .expect(201);\n\n      await request(app.getHttpServer())\n        .delete('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken}`])\n        .send({\n          safes: [{ chainId: cfSafe.chainId, address: cfSafe.address }],\n        })\n        .expect(204);\n\n      const getResponse = await request(app.getHttpServer())\n        .get('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken}`])\n        .expect(200);\n\n      expect(getResponse.body.safes).toEqual({});\n    });\n\n    it('Should return 404 when deleting non-existent safe', async () => {\n      const authPayloadDto = siweAuthPayloadDtoBuilder().build();\n      const accessToken = jwtService.sign(authPayloadDto);\n      const chain = chainBuilder().build();\n\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken}`]);\n\n      await request(app.getHttpServer())\n        .delete('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken}`])\n        .send({\n          safes: [\n            {\n              chainId: chain.chainId,\n              address: getAddress(faker.finance.ethereumAddress()),\n            },\n          ],\n        })\n        .expect(404);\n    });\n\n    it(\"Should not allow deleting a safe the caller isn't associated with\", async () => {\n      const authPayloadDto1 = siweAuthPayloadDtoBuilder().build();\n      const accessToken1 = jwtService.sign(authPayloadDto1);\n      const authPayloadDto2 = siweAuthPayloadDtoBuilder().build();\n      const accessToken2 = jwtService.sign(authPayloadDto2);\n      const cfSafe = buildCounterfactualSafe();\n\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken1}`]);\n      await request(app.getHttpServer())\n        .post('/v1/users/wallet')\n        .set('Cookie', [`access_token=${accessToken2}`]);\n\n      await request(app.getHttpServer())\n        .post('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken1}`])\n        .send({ safes: [cfSafe] })\n        .expect(201);\n\n      await request(app.getHttpServer())\n        .delete('/v1/users/counterfactual-safes')\n        .set('Cookie', [`access_token=${accessToken2}`])\n        .send({\n          safes: [{ chainId: cfSafe.chainId, address: cfSafe.address }],\n        })\n        .expect(404);\n    });\n\n    it('Should return 403 if not authenticated', async () => {\n      await request(app.getHttpServer())\n        .delete('/v1/users/counterfactual-safes')\n        .send({\n          safes: [\n            {\n              chainId: '1',\n              address: getAddress(faker.finance.ethereumAddress()),\n            },\n          ],\n        })\n        .expect(403);\n    });\n  });\n});\n",
+    "src/modules/counterfactual-safes/domain/counterfactual-safes.repository.integration.spec.ts": "// SPDX-License-Identifier: FSL-1.1-MIT\nimport { faker } from '@faker-js/faker';\nimport { DataSource } from 'typeorm';\nimport { getAddress, type Address } from 'viem';\nimport configuration from '@/config/entities/__tests__/configuration';\nimport { postgresConfig } from '@/config/entities/postgres.config';\nimport { PostgresDatabaseService } from '@/datasources/db/v2/postgres-database.service';\nimport { DatabaseMigrator } from '@/datasources/db/v2/database-migrator.service';\nimport { User } from '@/modules/users/datasources/entities/users.entity.db';\nimport { Member } from '@/modules/users/datasources/entities/member.entity.db';\nimport { Wallet } from '@/modules/wallets/datasources/entities/wallets.entity.db';\nimport { Space } from '@/modules/spaces/datasources/entities/space.entity.db';\nimport { SpaceSafe } from '@/modules/spaces/datasources/entities/space-safes.entity.db';\nimport { CounterfactualSafe } from '@/modules/counterfactual-safes/datasources/entities/counterfactual-safe.entity.db';\nimport { CounterfactualSafeUser } from '@/modules/counterfactual-safes/datasources/entities/counterfactual-safe-user.entity.db';\nimport { CounterfactualSafesRepository } from '@/modules/counterfactual-safes/domain/counterfactual-safes.repository';\nimport { counterfactualSafeBuilder } from '@/modules/counterfactual-safes/datasources/entities/__tests__/counterfactual-safe.entity.db.builder';\nimport { UniqueConstraintError } from '@/datasources/errors/unique-constraint-error';\nimport { BadRequestException, NotFoundException } from '@nestjs/common';\nimport type { Repository } from 'typeorm';\nimport type { ConfigService } from '@nestjs/config';\nimport type { ILoggingService } from '@/logging/logging.interface';\n\nconst mockLoggingService = {\n  debug: jest.fn(),\n  error: jest.fn(),\n  info: jest.fn(),\n  warn: jest.fn(),\n} as jest.MockedObjectDeep<ILoggingService>;\n\nfunction buildCounterfactualSafePayload(): Pick<\n  CounterfactualSafe,\n  | 'chainId'\n  | 'address'\n  | 'factoryAddress'\n  | 'masterCopy'\n  | 'saltNonce'\n  | 'safeVersion'\n  | 'threshold'\n  | 'owners'\n  | 'fallbackHandler'\n  | 'setupTo'\n  | 'setupData'\n  | 'paymentToken'\n  | 'payment'\n  | 'paymentReceiver'\n> {\n  const cfSafe = counterfactualSafeBuilder().build();\n  return {\n    chainId: cfSafe.chainId,\n    address: cfSafe.address,\n    factoryAddress: cfSafe.factoryAddress,\n    masterCopy: cfSafe.masterCopy,\n    saltNonce: cfSafe.saltNonce,\n    safeVersion: cfSafe.safeVersion,\n    threshold: cfSafe.threshold,\n    owners: cfSafe.owners,\n    fallbackHandler: cfSafe.fallbackHandler,\n    setupTo: cfSafe.setupTo,\n    setupData: cfSafe.setupData,\n    paymentToken: cfSafe.paymentToken,\n    payment: cfSafe.payment,\n    paymentReceiver: cfSafe.paymentReceiver,\n  };\n}\n\ndescribe('CounterfactualSafesRepository', () => {\n  let postgresDatabaseService: PostgresDatabaseService;\n  let counterfactualSafesRepo: CounterfactualSafesRepository;\n  let dbUserRepo: Repository<User>;\n  let dbWalletRepo: Repository<Wallet>;\n  let dbCounterfactualSafeRepo: Repository<CounterfactualSafe>;\n  let dbCounterfactualSafeUserRepo: Repository<CounterfactualSafeUser>;\n\n  const testDatabaseName = faker.string.alpha({\n    length: 10,\n    casing: 'lower',\n  });\n  const testConfiguration = configuration();\n\n  const dataSource = new DataSource({\n    ...postgresConfig({\n      ...testConfiguration.db.connection.postgres,\n      type: 'postgres',\n      database: testDatabaseName,\n    }),\n    migrationsTableName: testConfiguration.db.orm.migrationsTableName,\n    entities: [\n      CounterfactualSafe,\n      CounterfactualSafeUser,\n      Member,\n      Space,\n      SpaceSafe,\n      User,\n      Wallet,\n    ],\n  });\n\n  beforeAll(async () => {\n    // Create database\n    const testDataSource = new DataSource({\n      ...postgresConfig({\n        ...testConfiguration.db.connection.postgres,\n        type: 'postgres',\n        database: 'postgres',\n      }),\n    });\n    const testPostgresDatabaseService = new PostgresDatabaseService(\n      mockLoggingService,\n      testDataSource,\n    );\n    await testPostgresDatabaseService.initializeDatabaseConnection();\n    await testPostgresDatabaseService\n      .getDataSource()\n      .query(`CREATE DATABASE ${testDatabaseName}`);\n    await testPostgresDatabaseService.destroyDatabaseConnection();\n\n    // Create database connection\n    postgresDatabaseService = new PostgresDatabaseService(\n      mockLoggingService,\n      dataSource,\n    );\n    await postgresDatabaseService.initializeDatabaseConnection();\n\n    // Migrate database\n    const mockConfigService = {\n      getOrThrow: jest.fn().mockImplementation((key: string) => {\n        if (key === 'db.migrator.numberOfRetries') {\n          return testConfiguration.db.migrator.numberOfRetries;\n        }\n        if (key === 'db.migrator.retryAfterMs') {\n          return testConfiguration.db.migrator.retryAfterMs;\n        }\n      }),\n    } as jest.MockedObjectDeep<ConfigService>;\n    const migrator = new DatabaseMigrator(\n      mockLoggingService,\n      postgresDatabaseService,\n      mockConfigService,\n    );\n    await migrator.migrate();\n\n    counterfactualSafesRepo = new CounterfactualSafesRepository(\n      postgresDatabaseService,\n    );\n\n    dbUserRepo = dataSource.getRepository(User);\n    dbWalletRepo = dataSource.getRepository(Wallet);\n    dbCounterfactualSafeRepo = dataSource.getRepository(CounterfactualSafe);\n    dbCounterfactualSafeUserRepo = dataSource.getRepository(\n      CounterfactualSafeUser,\n    );\n  });\n\n  afterEach(async () => {\n    jest.resetAllMocks();\n\n    // Delete in dependency order\n    await dbCounterfactualSafeUserRepo\n      .createQueryBuilder()\n      .delete()\n      .where('1=1')\n      .execute();\n    await dbCounterfactualSafeRepo\n      .createQueryBuilder()\n      .delete()\n      .where('1=1')\n      .execute();\n    await dbWalletRepo.createQueryBuilder().delete().where('1=1').execute();\n    await dbUserRepo.createQueryBuilder().delete().where('1=1').execute();\n  });\n\n  afterAll(async () => {\n    await postgresDatabaseService.getDataSource().dropDatabase();\n    await postgresDatabaseService.destroyDatabaseConnection();\n  });\n\n  describe('createdAt/updatedAt', () => {\n    it('should set createdAt and updatedAt when creating a CounterfactualSafe', async () => {\n      const user = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId = user.identifiers[0].id as User['id'];\n      const payload = buildCounterfactualSafePayload();\n      const before = new Date().getTime();\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId,\n        payload: [payload],\n      });\n\n      const after = new Date().getTime();\n\n      const saved = await dbCounterfactualSafeRepo.findOneOrFail({\n        where: { chainId: payload.chainId, address: payload.address },\n      });\n\n      expect(saved.createdAt.getTime()).toBeGreaterThanOrEqual(before);\n      expect(saved.createdAt.getTime()).toBeLessThanOrEqual(after);\n      expect(saved.updatedAt.getTime()).toBeGreaterThanOrEqual(before);\n      expect(saved.updatedAt.getTime()).toBeLessThanOrEqual(after);\n    });\n  });\n\n  describe('create', () => {\n    it('should create a single CounterfactualSafe', async () => {\n      const user = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId = user.identifiers[0].id as User['id'];\n      const payload = buildCounterfactualSafePayload();\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId,\n        payload: [payload],\n      });\n\n      const saved = await dbCounterfactualSafeRepo.findOneOrFail({\n        where: { chainId: payload.chainId, address: payload.address },\n        relations: { creator: true },\n      });\n\n      expect(saved).toMatchObject({\n        id: expect.any(Number),\n        chainId: payload.chainId,\n        address: payload.address,\n        factoryAddress: payload.factoryAddress,\n        masterCopy: payload.masterCopy,\n        saltNonce: payload.saltNonce,\n        safeVersion: payload.safeVersion,\n        threshold: payload.threshold,\n        owners: payload.owners,\n        fallbackHandler: payload.fallbackHandler,\n        setupTo: payload.setupTo,\n        setupData: payload.setupData,\n        paymentToken: payload.paymentToken,\n        payment: payload.payment,\n        paymentReceiver: payload.paymentReceiver,\n        creator: expect.objectContaining({ id: userId }),\n        createdAt: expect.any(Date),\n        updatedAt: expect.any(Date),\n      });\n    });\n\n    it('should create multiple CounterfactualSafes', async () => {\n      const user = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId = user.identifiers[0].id as User['id'];\n      const payload1 = buildCounterfactualSafePayload();\n      const payload2 = buildCounterfactualSafePayload();\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId,\n        payload: [payload1, payload2],\n      });\n\n      const all = await dbCounterfactualSafeRepo.find();\n      expect(all).toHaveLength(2);\n    });\n\n    it('should create with null creatorId', async () => {\n      const payload = buildCounterfactualSafePayload();\n\n      await counterfactualSafesRepo.create({\n        creatorId: null,\n        payload: [payload],\n      });\n\n      const saved = await dbCounterfactualSafeRepo.findOneOrFail({\n        where: { chainId: payload.chainId, address: payload.address },\n      });\n\n      expect(saved.chainId).toBe(payload.chainId);\n      expect(saved.address).toBe(payload.address);\n    });\n\n    it('should create with nullable address fields set to null', async () => {\n      const user = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId = user.identifiers[0].id as User['id'];\n      const payload = {\n        ...buildCounterfactualSafePayload(),\n        fallbackHandler: null,\n        setupTo: null,\n        paymentToken: null,\n        payment: null,\n        paymentReceiver: null,\n      };\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId,\n        payload: [payload],\n      });\n\n      const saved = await dbCounterfactualSafeRepo.findOneOrFail({\n        where: { chainId: payload.chainId, address: payload.address },\n      });\n\n      expect(saved.fallbackHandler).toBeNull();\n      expect(saved.setupTo).toBeNull();\n      expect(saved.paymentToken).toBeNull();\n      expect(saved.payment).toBeNull();\n      expect(saved.paymentReceiver).toBeNull();\n    });\n\n    it('should be idempotent when the same user re-submits identical init params', async () => {\n      const user = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId = user.identifiers[0].id as User['id'];\n      const payload = buildCounterfactualSafePayload();\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId,\n        payload: [payload],\n      });\n      await counterfactualSafesRepo.create({\n        creatorId: userId,\n        payload: [payload],\n      });\n\n      const all = await dbCounterfactualSafeRepo.find();\n      expect(all).toHaveLength(1);\n\n      const associations = await dbCounterfactualSafeUserRepo.find();\n      expect(associations).toHaveLength(1);\n    });\n\n    it('should share the canonical row and create a second association when another user submits identical init params', async () => {\n      const user1 = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId1 = user1.identifiers[0].id as User['id'];\n      const user2 = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId2 = user2.identifiers[0].id as User['id'];\n      const payload = buildCounterfactualSafePayload();\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId1,\n        payload: [payload],\n      });\n      await counterfactualSafesRepo.create({\n        creatorId: userId2,\n        payload: [payload],\n      });\n\n      const all = await dbCounterfactualSafeRepo.find({\n        relations: { creator: true },\n      });\n      expect(all).toHaveLength(1);\n      expect(all[0].creator?.id).toBe(userId1);\n\n      const associations = await dbCounterfactualSafeUserRepo.find({\n        relations: { user: true },\n      });\n      expect(associations).toHaveLength(2);\n      expect(associations.map((a) => a.user.id).sort()).toEqual(\n        [userId1, userId2].sort(),\n      );\n    });\n\n    it('should throw UniqueConstraintError when (chainId, address) collides with different init params', async () => {\n      const user1 = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId1 = user1.identifiers[0].id as User['id'];\n      const user2 = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId2 = user2.identifiers[0].id as User['id'];\n      const payload = buildCounterfactualSafePayload();\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId1,\n        payload: [payload],\n      });\n\n      await expect(\n        counterfactualSafesRepo.create({\n          creatorId: userId2,\n          payload: [{ ...payload, threshold: payload.threshold + 1 }],\n        }),\n      ).rejects.toThrow(UniqueConstraintError);\n    });\n  });\n\n  describe('findByUserId', () => {\n    it('should return counterfactual safes for a user', async () => {\n      const user = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId = user.identifiers[0].id as User['id'];\n      const payload = buildCounterfactualSafePayload();\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId,\n        payload: [payload],\n      });\n\n      const found = await counterfactualSafesRepo.findByUserId({ userId });\n\n      expect(found).toHaveLength(1);\n      expect(found[0]).toMatchObject({\n        chainId: payload.chainId,\n        address: payload.address,\n      });\n    });\n\n    it('should return empty array for a user with no associations', async () => {\n      const user = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId = user.identifiers[0].id as User['id'];\n\n      const found = await counterfactualSafesRepo.findByUserId({ userId });\n\n      expect(found).toEqual([]);\n    });\n\n    it('should return a safe shared by another user once the second user associates', async () => {\n      const user1 = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId1 = user1.identifiers[0].id as User['id'];\n      const user2 = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId2 = user2.identifiers[0].id as User['id'];\n      const payload = buildCounterfactualSafePayload();\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId1,\n        payload: [payload],\n      });\n\n      expect(\n        await counterfactualSafesRepo.findByUserId({ userId: userId2 }),\n      ).toEqual([]);\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId2,\n        payload: [payload],\n      });\n\n      const found = await counterfactualSafesRepo.findByUserId({\n        userId: userId2,\n      });\n      expect(found).toHaveLength(1);\n      expect(found[0]).toMatchObject({\n        chainId: payload.chainId,\n        address: payload.address,\n      });\n    });\n  });\n\n  describe('findOrFail', () => {\n    it('should return counterfactual safes matching the query', async () => {\n      const user = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId = user.identifiers[0].id as User['id'];\n      const payload = buildCounterfactualSafePayload();\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId,\n        payload: [payload],\n      });\n\n      const found = await counterfactualSafesRepo.findOrFail({\n        where: { creator: { id: userId } },\n      });\n\n      expect(found).toHaveLength(1);\n      expect(found[0]).toMatchObject({\n        chainId: payload.chainId,\n        address: payload.address,\n      });\n    });\n\n    it('should throw NotFoundException if none found', async () => {\n      const user = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId = user.identifiers[0].id as User['id'];\n\n      await expect(\n        counterfactualSafesRepo.findOrFail({\n          where: { creator: { id: userId } },\n        }),\n      ).rejects.toThrow(\n        new NotFoundException('Counterfactual Safe not found.'),\n      );\n    });\n  });\n\n  describe('find', () => {\n    it('should return counterfactual safes matching the query', async () => {\n      const user = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId = user.identifiers[0].id as User['id'];\n      const payload1 = buildCounterfactualSafePayload();\n      const payload2 = buildCounterfactualSafePayload();\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId,\n        payload: [payload1, payload2],\n      });\n\n      const found = await counterfactualSafesRepo.find({\n        where: { creator: { id: userId } },\n      });\n\n      expect(found).toHaveLength(2);\n    });\n\n    it('should return empty array if none found', async () => {\n      const user = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId = user.identifiers[0].id as User['id'];\n\n      const found = await counterfactualSafesRepo.find({\n        where: { creator: { id: userId } },\n      });\n\n      expect(found).toEqual([]);\n    });\n  });\n\n  describe('delete', () => {\n    it('should remove the user association and the canonical row when no other associations remain', async () => {\n      const user = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId = user.identifiers[0].id as User['id'];\n      const payload = buildCounterfactualSafePayload();\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId,\n        payload: [payload],\n      });\n\n      await counterfactualSafesRepo.delete({\n        userId,\n        payload: [{ chainId: payload.chainId, address: payload.address }],\n      });\n\n      const associations = await dbCounterfactualSafeUserRepo.find();\n      expect(associations).toHaveLength(0);\n      // Canonical row is intentionally kept (audit trail); only the association is removed.\n      const remaining = await dbCounterfactualSafeRepo.find();\n      expect(remaining).toHaveLength(1);\n    });\n\n    it('should remove only the requesting user association when the safe is shared', async () => {\n      const user1 = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId1 = user1.identifiers[0].id as User['id'];\n      const user2 = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId2 = user2.identifiers[0].id as User['id'];\n      const payload = buildCounterfactualSafePayload();\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId1,\n        payload: [payload],\n      });\n      await counterfactualSafesRepo.create({\n        creatorId: userId2,\n        payload: [payload],\n      });\n\n      await counterfactualSafesRepo.delete({\n        userId: userId2,\n        payload: [{ chainId: payload.chainId, address: payload.address }],\n      });\n\n      const associations = await dbCounterfactualSafeUserRepo.find({\n        relations: { user: true },\n      });\n      expect(associations).toHaveLength(1);\n      expect(associations[0].user.id).toBe(userId1);\n\n      const remaining = await dbCounterfactualSafeRepo.find();\n      expect(remaining).toHaveLength(1);\n    });\n\n    it('should delete multiple associations', async () => {\n      const user = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId = user.identifiers[0].id as User['id'];\n      const payload1 = buildCounterfactualSafePayload();\n      const payload2 = buildCounterfactualSafePayload();\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId,\n        payload: [payload1, payload2],\n      });\n\n      await counterfactualSafesRepo.delete({\n        userId,\n        payload: [\n          { chainId: payload1.chainId, address: payload1.address },\n          { chainId: payload2.chainId, address: payload2.address },\n        ],\n      });\n\n      const associations = await dbCounterfactualSafeUserRepo.find();\n      expect(associations).toHaveLength(0);\n    });\n\n    it('should throw NotFoundException if the counterfactual safe does not exist', async () => {\n      const user = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId = user.identifiers[0].id as User['id'];\n\n      await expect(\n        counterfactualSafesRepo.delete({\n          userId,\n          payload: [\n            {\n              chainId: faker.string.numeric(),\n              address: getAddress(faker.finance.ethereumAddress()),\n            },\n          ],\n        }),\n      ).rejects.toThrow(\n        new NotFoundException('Counterfactual Safe not found.'),\n      );\n    });\n\n    it('should throw NotFoundException if user is not associated with the safe', async () => {\n      const user1 = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId1 = user1.identifiers[0].id as User['id'];\n      const user2 = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId2 = user2.identifiers[0].id as User['id'];\n      const payload = buildCounterfactualSafePayload();\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId1,\n        payload: [payload],\n      });\n\n      await expect(\n        counterfactualSafesRepo.delete({\n          userId: userId2,\n          payload: [{ chainId: payload.chainId, address: payload.address }],\n        }),\n      ).rejects.toThrow(\n        new NotFoundException('Counterfactual Safe not found.'),\n      );\n\n      // The canonical row and user1's association should still exist.\n      const associations = await dbCounterfactualSafeUserRepo.find();\n      expect(associations).toHaveLength(1);\n    });\n\n    it('should throw BadRequestException if found count does not match payload count', async () => {\n      const user = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId = user.identifiers[0].id as User['id'];\n      const payload = buildCounterfactualSafePayload();\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId,\n        payload: [payload],\n      });\n\n      await expect(\n        counterfactualSafesRepo.delete({\n          userId,\n          payload: [\n            { chainId: payload.chainId, address: payload.address },\n            {\n              chainId: faker.string.numeric(),\n              address: getAddress(faker.finance.ethereumAddress()),\n            },\n          ],\n        }),\n      ).rejects.toThrow(BadRequestException);\n    });\n  });\n\n  describe('address checksumming', () => {\n    it('should store non-checksummed addresses as checksummed', async () => {\n      const user = await dbUserRepo.insert({ status: 'ACTIVE' });\n      const userId = user.identifiers[0].id as User['id'];\n      const nonChecksummedAddress = faker.finance\n        .ethereumAddress()\n        .toLowerCase() as Address;\n      const checksummedAddress = getAddress(nonChecksummedAddress);\n      const payload = {\n        ...buildCounterfactualSafePayload(),\n        address: nonChecksummedAddress,\n      };\n\n      await counterfactualSafesRepo.create({\n        creatorId: userId,\n        payload: [payload],\n      });\n\n      const saved = await dbCounterfactualSafeRepo.findOneOrFail({\n        where: { chainId: payload.chainId },\n      });\n\n      expect(saved.address).toEqual(checksummedAddress);\n    });\n  });\n});\n"
+  },
+  "has_audio": true,
+  "has_video": true,
+  "has_thumbnail": true,
+  "audio_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-client-gateway/pr-3055/6057d28770d9/audio.mp3",
+  "audio_manifest": {
+    "file": "audio.mp3",
+    "total_ms": 348754,
+    "silence_ms": 400,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "adapter": "elevenlabs",
+    "model": "eleven_turbo_v2_5",
+    "intro": {
+      "narration": "Grab some popcorn and let's dive in. Here's the pitch: This PR replaces the single-owner model for counterfactual safes with a many-to-many junction table (`counterfactual_safe_users`) so multiple users can share a single canonical `counterfactual_safes` row.",
+      "narration_ms": 15000,
+      "gap_ms": 500,
+      "duration_ms": 15500
+    },
+    "steps": [
+      {
+        "step": 1,
+        "start_ms": 15500,
+        "end_ms": 36862
+      },
+      {
+        "step": 2,
+        "start_ms": 37262,
+        "end_ms": 49801
+      },
+      {
+        "step": 3,
+        "start_ms": 50201,
+        "end_ms": 66269
+      },
+      {
+        "step": 4,
+        "start_ms": 66669,
+        "end_ms": 87381
+      },
+      {
+        "step": 5,
+        "start_ms": 87781,
+        "end_ms": 103106
+      },
+      {
+        "step": 6,
+        "start_ms": 103506,
+        "end_ms": 118274
+      },
+      {
+        "step": 7,
+        "start_ms": 118674,
+        "end_ms": 132699
+      },
+      {
+        "step": 8,
+        "start_ms": 133099,
+        "end_ms": 152929
+      },
+      {
+        "step": 9,
+        "start_ms": 153329,
+        "end_ms": 171766
+      },
+      {
+        "step": 10,
+        "start_ms": 172166,
+        "end_ms": 185030
+      },
+      {
+        "step": 11,
+        "start_ms": 185430,
+        "end_ms": 202055
+      },
+      {
+        "step": 12,
+        "start_ms": 202455,
+        "end_ms": 218291
+      },
+      {
+        "step": 13,
+        "start_ms": 218691,
+        "end_ms": 234109
+      },
+      {
+        "step": 14,
+        "start_ms": 234509,
+        "end_ms": 253131
+      },
+      {
+        "step": 15,
+        "start_ms": 253531,
+        "end_ms": 272432
+      },
+      {
+        "step": 16,
+        "start_ms": 272832,
+        "end_ms": 294798
+      },
+      {
+        "step": 17,
+        "start_ms": 295198,
+        "end_ms": 312659
+      },
+      {
+        "step": 18,
+        "start_ms": 313059,
+        "end_ms": 330428
+      },
+      {
+        "step": 19,
+        "start_ms": 330828,
+        "end_ms": 348754
+      }
+    ],
+    "chapters": [
+      {
+        "title": "Why this change",
+        "start_ms": 15500,
+        "end_ms": 49801,
+        "step_range": [
+          1,
+          2
+        ]
+      },
+      {
+        "title": "The junction table foundation",
+        "start_ms": 50201,
+        "end_ms": 118274,
+        "step_range": [
+          3,
+          6
+        ]
+      },
+      {
+        "title": "Rewriting the repository",
+        "start_ms": 118674,
+        "end_ms": 202055,
+        "step_range": [
+          7,
+          11
+        ]
+      },
+      {
+        "title": "Consumers that had to adapt",
+        "start_ms": 202455,
+        "end_ms": 272432,
+        "step_range": [
+          12,
+          15
+        ]
+      },
+      {
+        "title": "What can go wrong",
+        "start_ms": 272832,
+        "end_ms": 330428,
+        "step_range": [
+          16,
+          18
+        ]
+      },
+      {
+        "title": "The bottom line",
+        "start_ms": 330828,
+        "end_ms": 348754,
+        "step_range": [
+          19,
+          19
+        ]
+      }
+    ],
+    "generated_at": 1777034338215
+  },
+  "audio_manifest_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-client-gateway/pr-3055/6057d28770d9/audio.json",
+  "video_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-client-gateway/pr-3055/6057d28770d9/video-github.mp4",
+  "thumbnail_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-client-gateway/pr-3055/6057d28770d9/thumbnail.png",
+  "pr_url": "https://github.com/safe-global/safe-client-gateway/pull/3055",
+  "is_sample": false,
+  "sample_id": null
+}
