@@ -1,0 +1,163 @@
+{
+  "file": "audio.mp3",
+  "total_ms": 315058,
+  "silence_ms": 400,
+  "voice": "nPczCjzI2devNBz1zQrb",
+  "adapter": "elevenlabs",
+  "model": "eleven_turbo_v2_5",
+  "intro": {
+    "narration": "Grab some popcorn and let's dive in. Here's the pitch: This PR adds a 'skills CTA' (call-to-action) to the `with-supabase` example app, promoting the installation of Supabase agent skills for AI-assisted development.",
+    "narration_ms": 14071,
+    "gap_ms": 500,
+    "duration_ms": 14571
+  },
+  "steps": [
+    {
+      "step": 1,
+      "start_ms": 14571,
+      "end_ms": 31150
+    },
+    {
+      "step": 2,
+      "start_ms": 31550,
+      "end_ms": 49290
+    },
+    {
+      "step": 3,
+      "start_ms": 49690,
+      "end_ms": 64551
+    },
+    {
+      "step": 4,
+      "start_ms": 64951,
+      "end_ms": 79487
+    },
+    {
+      "step": 5,
+      "start_ms": 79887,
+      "end_ms": 95073
+    },
+    {
+      "step": 6,
+      "start_ms": 95473,
+      "end_ms": 118554
+    },
+    {
+      "step": 7,
+      "start_ms": 118954,
+      "end_ms": 137019
+    },
+    {
+      "step": 8,
+      "start_ms": 137419,
+      "end_ms": 153301
+    },
+    {
+      "step": 9,
+      "start_ms": 153701,
+      "end_ms": 171627
+    },
+    {
+      "step": 10,
+      "start_ms": 172027,
+      "end_ms": 187213
+    },
+    {
+      "step": 11,
+      "start_ms": 187613,
+      "end_ms": 200988
+    },
+    {
+      "step": 12,
+      "start_ms": 201388,
+      "end_ms": 214577
+    },
+    {
+      "step": 13,
+      "start_ms": 214977,
+      "end_ms": 233599
+    },
+    {
+      "step": 14,
+      "start_ms": 233999,
+      "end_ms": 247652
+    },
+    {
+      "step": 15,
+      "start_ms": 248052,
+      "end_ms": 265142
+    },
+    {
+      "step": 16,
+      "start_ms": 265542,
+      "end_ms": 282353
+    },
+    {
+      "step": 17,
+      "start_ms": 282753,
+      "end_ms": 298961
+    },
+    {
+      "step": 18,
+      "start_ms": 299361,
+      "end_ms": 315058
+    }
+  ],
+  "chapters": [
+    {
+      "title": "Why this change",
+      "start_ms": 14571,
+      "end_ms": 49290,
+      "step_range": [
+        1,
+        2
+      ]
+    },
+    {
+      "title": "The new copy button component",
+      "start_ms": 49690,
+      "end_ms": 153301,
+      "step_range": [
+        3,
+        8
+      ]
+    },
+    {
+      "title": "Hero gets the skills CTA",
+      "start_ms": 153701,
+      "end_ms": 200988,
+      "step_range": [
+        9,
+        11
+      ]
+    },
+    {
+      "title": "Tutorial flow picks it up too",
+      "start_ms": 201388,
+      "end_ms": 247652,
+      "step_range": [
+        12,
+        14
+      ]
+    },
+    {
+      "title": "What could go wrong",
+      "start_ms": 248052,
+      "end_ms": 298961,
+      "step_range": [
+        15,
+        17
+      ]
+    },
+    {
+      "title": "Bottom line",
+      "start_ms": 299361,
+      "end_ms": 315058,
+      "step_range": [
+        18,
+        18
+      ]
+    }
+  ],
+  "generated_at": 1777043090318
+}

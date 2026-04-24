@@ -1,0 +1,900 @@
+{
+  "slug": "vercel/next.js",
+  "pr_number": 93193,
+  "head_sha": "20ab5ad2a3fbcf16ab7c3c9bfda388ffa66808b8",
+  "head_sha_short": "20ab5ad2a3fb",
+  "pr_title": "Add skills CTA to hero and tutorial steps",
+  "created_at": 1777043025746,
+  "briefing": {
+    "id": 15,
+    "pr": {
+      "repo_slug": "vercel/next.js",
+      "number": 93193
+    },
+    "head_sha": "20ab5ad2a3fbcf16ab7c3c9bfda388ffa66808b8",
+    "base_sha": "cc0575745a4bf057659503837cedf59ce54ee452",
+    "status": "done",
+    "model": "claude-sonnet-4-6",
+    "cost_cents": 9,
+    "latency_ms": 58420,
+    "summary_md": "This PR adds a 'skills CTA' (call-to-action) to the `with-supabase` example app, promoting the installation of Supabase agent skills for AI-assisted development. It introduces a new `CopyButton` client component that renders a copyable command (`npx skills add supabase/agent-skills`) with clipboard support including a Safari-compatible fallback. The `Hero` component is updated to display a link to Supabase AI skills docs alongside the `CopyButton`. A new 'Install agent skills' tutorial step is also prepended to the `ConnectSupabaseSteps` ordered list, shifting all existing steps down by one.",
+    "file_summaries": [
+      {
+        "path": "examples/with-supabase/components/copy-button.tsx",
+        "what_changed": "Adds a new `CopyButton` client component in `examples/with-supabase/components/copy-button.tsx` that renders a code snippet with a clipboard copy button, using the `ClipboardItem` API for Safari compatibility and falling back to `navigator.clipboard.writeText`.",
+        "why_it_matters": "Likely provides a UI element for copying agent skill install commands introduced in the hero/tutorial steps CTA changes.",
+        "risk_hints": [
+          "The `setTimeout(..., 0)` + manual promise pattern for Safari clipboard write is non-standard and may be fragile; verify it actually works in Safari and doesn't introduce race conditions",
+          "The `window.document.hasFocus()` guard silently no-ops the copy without user feedback — consider showing an error or tooltip",
+          "No error handling shown to the user if clipboard write fails (both branches swallow errors silently)",
+          "Component has no accessible visible label for the copy button beyond `aria-label='Copy'`; verify screen reader experience",
+          "ClipboardItem feature detection checks `navigator.clipboard?.write` but then uses `navigator.clipboard.write` (non-optional) inside the branch — safe here but worth noting"
+        ]
+      },
+      {
+        "path": "examples/with-supabase/components/hero.tsx",
+        "what_changed": "Adds a new section to the `Hero` component that renders a link to Supabase AI skills docs and a `CopyButton` pre-filled with the command `npx skills add supabase/agent-skills`.",
+        "why_it_matters": "Promotes Supabase agent skills installation directly from the example app's hero section to improve developer onboarding.",
+        "risk_hints": [
+          "Verify `CopyButton` component exists and accepts a `text` prop with the expected interface",
+          "The URL `https://supabase.com/docs/guides/getting-started/ai-skills` should be confirmed as live and correct",
+          "The command `npx skills add supabase/agent-skills` should be validated as the correct/current install command",
+          "No tests or snapshot updates included — check if any exist for the Hero component"
+        ]
+      },
+      {
+        "path": "examples/with-supabase/components/tutorial/connect-supabase-steps.tsx",
+        "what_changed": "A new `TutorialStep` titled 'Install agent skills' is prepended to the ordered list in `ConnectSupabaseSteps`, containing a paragraph with a `next/link` external link to the Supabase AI skills docs, including an inline SVG external-link icon.",
+        "why_it_matters": "Likely promotes Supabase agent skills tooling to users setting up the with-supabase example, driving adoption of AI-assisted development features.",
+        "risk_hints": [
+          "New step is inserted as step 1, shifting all existing numbered steps down — verify UX intent and whether step numbering/ordering is correct",
+          "External URL (supabase.com/docs/guides/getting-started/ai-skills) should be validated as live and stable",
+          "SVG icon is hardcoded inline rather than using a shared icon component — inconsistent with potential project conventions",
+          "'Install agent skills' step appears before environment setup steps, which may confuse users who haven't connected Supabase yet"
+        ]
+      }
+    ],
+    "architecture_delta": {
+      "architecture_notes": "The change touches three files within `examples/with-supabase`: a new `CopyButton` component, the existing `Hero` component, and `ConnectSupabaseSteps` in the tutorial flow. `CopyButton` uses the browser `ClipboardItem` API with a `navigator.clipboard.write` path for Safari and a `writeText` fallback, making it a client component. No shared state or API routes are involved; the change is purely presentational and confined to the `with-supabase` example.",
+      "reviewer_checklist": [
+        "Verify the external URL `https://supabase.com/docs/guides/getting-started/ai-skills` is live and resolves to the correct documentation page.",
+        "Confirm the install command `npx skills add supabase/agent-skills` is accurate and currently valid.",
+        "Test the `CopyButton` clipboard functionality in Safari to ensure the `ClipboardItem` + `setTimeout` workaround works without race conditions or silent failures.",
+        "Check that prepending 'Install agent skills' as step 1 in `ConnectSupabaseSteps` is the intended ordering, given users may not have Supabase connected yet at that point.",
+        "Ensure the `CopyButton` copy action provides visible user feedback on failure (currently errors appear to be swallowed silently) and that the button is accessible to screen readers."
+      ]
+    },
+    "tour": {
+      "chapters": [
+        {
+          "title": "Why this change",
+          "step_range": [
+            1,
+            2
+          ]
+        },
+        {
+          "title": "The new copy button component",
+          "step_range": [
+            3,
+            8
+          ]
+        },
+        {
+          "title": "Hero gets the skills CTA",
+          "step_range": [
+            9,
+            11
+          ]
+        },
+        {
+          "title": "Tutorial flow picks it up too",
+          "step_range": [
+            12,
+            14
+          ]
+        },
+        {
+          "title": "What could go wrong",
+          "step_range": [
+            15,
+            17
+          ]
+        },
+        {
+          "title": "Bottom line",
+          "step_range": [
+            18,
+            18
+          ]
+        }
+      ],
+      "total_seconds": 235,
+      "steps": [
+        {
+          "step": 1,
+          "phase": "motivation",
+          "location": {
+            "file": "examples/with-supabase/components/hero.tsx",
+            "line_range": [
+              1,
+              10
+            ],
+            "symbol": "Hero"
+          },
+          "action": "open",
+          "narration": "This PR is about developer onboarding. The with-supabase example app is often the first thing a developer sees, and the team wants to surface Supabase agent skills right at that moment. The goal is a single install command, one click to copy, visible in both the hero banner and the tutorial checklist.",
+          "estimated_seconds": 15
+        },
+        {
+          "step": 2,
+          "phase": "motivation",
+          "location": {
+            "file": "examples/with-supabase/components/tutorial/connect-supabase-steps.tsx",
+            "line_range": [
+              4,
+              15
+            ],
+            "symbol": "ConnectSupabaseSteps"
+          },
+          "action": "open",
+          "narration": "Two touch points get the CTA: the hero section at the top of the page, and the step-by-step tutorial list below it. Both point to the same Supabase AI skills docs URL and the same install command. That repetition is intentional — catch the developer wherever their eye lands first.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 3,
+          "phase": "change",
+          "location": {
+            "file": "examples/with-supabase/components/copy-button.tsx",
+            "line_range": [
+              1,
+              10
+            ],
+            "symbol": "CopyButton"
+          },
+          "action": "open",
+          "narration": "The centerpiece of this PR is a brand-new client component called CopyButton. It lives in the shared components folder alongside Hero and the tutorial steps. Because it touches the browser clipboard API, it needs the use client directive at the top.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 4,
+          "phase": "change",
+          "location": {
+            "file": "examples/with-supabase/components/copy-button.tsx",
+            "line_range": [
+              5,
+              20
+            ],
+            "symbol": "CopyButton"
+          },
+          "action": "scroll-to",
+          "narration": "The component accepts a text prop — that is the string it will copy to the clipboard. It renders the command in a styled code element next to a small copy icon button. The button carries an aria-label of Copy so screen readers have something to announce.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 5,
+          "phase": "change",
+          "location": {
+            "file": "examples/with-supabase/components/copy-button.tsx",
+            "line_range": [
+              10,
+              30
+            ],
+            "symbol": "CopyButton"
+          },
+          "action": "scroll-to",
+          "narration": "Here is the copy logic. The component first checks whether navigator.clipboard.write is available, which is the signal that the browser supports the ClipboardItem API. If it does, it takes the Safari-compatible path using ClipboardItem and a promise-wrapped blob.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 6,
+          "phase": "change",
+          "location": {
+            "file": "examples/with-supabase/components/copy-button.tsx",
+            "line_range": [
+              25,
+              45
+            ],
+            "symbol": "CopyButton"
+          },
+          "action": "scroll-to",
+          "narration": "The Safari path wraps the text in a ClipboardItem with a text-slash-plain MIME type and calls navigator.clipboard.write inside a setTimeout with a zero-millisecond delay. That delay is a known workaround for Safari's requirement that clipboard writes happen synchronously within a user gesture. The fallback branch simply calls navigator.clipboard.writeText, which works everywhere else.",
+          "estimated_seconds": 15
+        },
+        {
+          "step": 7,
+          "phase": "change",
+          "location": {
+            "file": "examples/with-supabase/components/copy-button.tsx",
+            "line_range": [
+              15,
+              25
+            ],
+            "symbol": "CopyButton"
+          },
+          "action": "flick-back",
+          "narration": "Before either clipboard path runs, there is a guard: window.document.hasFocus must return true. If the document does not have focus the function returns early and nothing happens. This prevents clipboard writes when the tab is in the background, but it does so silently with no user feedback.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 8,
+          "phase": "change",
+          "location": {
+            "file": "examples/with-supabase/components/copy-button.tsx",
+            "line_range": [
+              40,
+              60
+            ],
+            "symbol": "CopyButton"
+          },
+          "action": "scroll-to",
+          "narration": "After a successful copy the component briefly flips a copied state flag, which swaps the icon to a checkmark for visual confirmation. A short timeout resets it back to the clipboard icon. It is a clean, self-contained feedback loop with no external state management needed.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 9,
+          "phase": "change",
+          "location": {
+            "file": "examples/with-supabase/components/hero.tsx",
+            "line_range": [
+              5,
+              30
+            ],
+            "symbol": "Hero"
+          },
+          "action": "open",
+          "narration": "Now let us see how Hero uses the new component. The existing hero markup stays intact; a new section is appended below it. That section contains a short label, a link to the Supabase AI skills docs, and the CopyButton pre-loaded with the npx skills add supabase slash agent-skills command.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 10,
+          "phase": "change",
+          "location": {
+            "file": "examples/with-supabase/components/hero.tsx",
+            "line_range": [
+              30,
+              50
+            ],
+            "symbol": "Hero"
+          },
+          "action": "scroll-to",
+          "narration": "The docs link opens in a new tab and points to supabase.com slash docs slash guides slash getting-started slash ai-skills. CopyButton sits right next to it, so a developer can read the docs link and immediately grab the install command without leaving the page.",
+          "callouts": [
+            {
+              "file": "examples/with-supabase/components/copy-button.tsx",
+              "line": 5,
+              "note": "CopyButton receives the install command as its text prop here"
+            }
+          ],
+          "estimated_seconds": 13
+        },
+        {
+          "step": 11,
+          "phase": "change",
+          "location": {
+            "file": "examples/with-supabase/components/hero.tsx",
+            "line_range": [
+              5,
+              10
+            ],
+            "symbol": "Hero"
+          },
+          "action": "flick-back",
+          "narration": "Hero is a server component by default in this app, but importing CopyButton is fine because Next.js handles the client boundary at the CopyButton level. Hero itself does not need to become a client component just because one of its children is.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 12,
+          "phase": "ripple",
+          "location": {
+            "file": "examples/with-supabase/components/tutorial/connect-supabase-steps.tsx",
+            "line_range": [
+              4,
+              20
+            ],
+            "symbol": "ConnectSupabaseSteps"
+          },
+          "action": "open",
+          "narration": "The second touch point is the tutorial ordered list. A brand-new TutorialStep titled Install agent skills is prepended as the very first item. Because this is an ordered list, every existing step silently shifts down by one number.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 13,
+          "phase": "ripple",
+          "location": {
+            "file": "examples/with-supabase/components/tutorial/connect-supabase-steps.tsx",
+            "line_range": [
+              10,
+              35
+            ],
+            "symbol": "ConnectSupabaseSteps"
+          },
+          "action": "scroll-to",
+          "narration": "The new step contains a paragraph with a next slash link pointing to the same AI skills docs URL used in the hero. It also includes an inline SVG external-link icon to signal that the link leaves the app. Notice this SVG is hardcoded directly in the JSX rather than pulled from a shared icon component.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 14,
+          "phase": "ripple",
+          "location": {
+            "file": "examples/with-supabase/components/tutorial/connect-supabase-steps.tsx",
+            "line_range": [
+              35,
+              60
+            ],
+            "symbol": "ConnectSupabaseSteps"
+          },
+          "action": "scroll-to",
+          "narration": "The original steps — connect your Supabase project, set environment variables, and so on — are all still here, just renumbered. No logic changed; it is purely a structural insertion at the top of the list.",
+          "estimated_seconds": 12
+        },
+        {
+          "step": 15,
+          "phase": "risk",
+          "location": {
+            "file": "examples/with-supabase/components/copy-button.tsx",
+            "line_range": [
+              25,
+              40
+            ],
+            "symbol": "CopyButton"
+          },
+          "action": "jump-to-definition",
+          "narration": "The Safari clipboard workaround is the trickiest part of this PR. The setTimeout with zero delay is a well-known trick, but it is fragile: if Safari tightens its gesture-detection rules in a future version, this could silently stop working. It is worth manually testing in Safari before merging.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 16,
+          "phase": "risk",
+          "location": {
+            "file": "examples/with-supabase/components/copy-button.tsx",
+            "line_range": [
+              15,
+              25
+            ],
+            "symbol": "CopyButton"
+          },
+          "action": "flick-back",
+          "narration": "Both the hasFocus early-return and any clipboard write failure are completely silent to the user. If the copy does not work, the icon never changes and there is no error message. A reviewer should ask whether a visible error state or tooltip is needed here for a polished developer experience.",
+          "estimated_seconds": 14
+        },
+        {
+          "step": 17,
+          "phase": "risk",
+          "location": {
+            "file": "examples/with-supabase/components/tutorial/connect-supabase-steps.tsx",
+            "line_range": [
+              4,
+              15
+            ],
+            "symbol": "ConnectSupabaseSteps"
+          },
+          "action": "open",
+          "narration": "Placing Install agent skills as step one means a developer sees it before they have even connected Supabase. That ordering might confuse someone who does not know what agent skills are yet. It is worth confirming with the team that this sequence matches the intended onboarding flow.",
+          "estimated_seconds": 13
+        },
+        {
+          "step": 18,
+          "phase": "wrap",
+          "location": {
+            "file": "examples/with-supabase/components/hero.tsx",
+            "line_range": [
+              5,
+              50
+            ],
+            "symbol": "Hero"
+          },
+          "action": "flick-back",
+          "narration": "All told, this is a focused, self-contained presentational change: a new clipboard-aware CopyButton, a skills CTA wired into the hero, and a matching tutorial step — all confined to the with-supabase example with no shared infrastructure touched.",
+          "estimated_seconds": 13
+        }
+      ]
+    },
+    "created_at": 1777043025746
+  },
+  "tour": {
+    "chapters": [
+      {
+        "title": "Why this change",
+        "step_range": [
+          1,
+          2
+        ]
+      },
+      {
+        "title": "The new copy button component",
+        "step_range": [
+          3,
+          8
+        ]
+      },
+      {
+        "title": "Hero gets the skills CTA",
+        "step_range": [
+          9,
+          11
+        ]
+      },
+      {
+        "title": "Tutorial flow picks it up too",
+        "step_range": [
+          12,
+          14
+        ]
+      },
+      {
+        "title": "What could go wrong",
+        "step_range": [
+          15,
+          17
+        ]
+      },
+      {
+        "title": "Bottom line",
+        "step_range": [
+          18,
+          18
+        ]
+      }
+    ],
+    "total_seconds": 235,
+    "steps": [
+      {
+        "step": 1,
+        "phase": "motivation",
+        "location": {
+          "file": "examples/with-supabase/components/hero.tsx",
+          "line_range": [
+            1,
+            10
+          ],
+          "symbol": "Hero"
+        },
+        "action": "open",
+        "narration": "This PR is about developer onboarding. The with-supabase example app is often the first thing a developer sees, and the team wants to surface Supabase agent skills right at that moment. The goal is a single install command, one click to copy, visible in both the hero banner and the tutorial checklist.",
+        "estimated_seconds": 15
+      },
+      {
+        "step": 2,
+        "phase": "motivation",
+        "location": {
+          "file": "examples/with-supabase/components/tutorial/connect-supabase-steps.tsx",
+          "line_range": [
+            4,
+            15
+          ],
+          "symbol": "ConnectSupabaseSteps"
+        },
+        "action": "open",
+        "narration": "Two touch points get the CTA: the hero section at the top of the page, and the step-by-step tutorial list below it. Both point to the same Supabase AI skills docs URL and the same install command. That repetition is intentional — catch the developer wherever their eye lands first.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 3,
+        "phase": "change",
+        "location": {
+          "file": "examples/with-supabase/components/copy-button.tsx",
+          "line_range": [
+            1,
+            10
+          ],
+          "symbol": "CopyButton"
+        },
+        "action": "open",
+        "narration": "The centerpiece of this PR is a brand-new client component called CopyButton. It lives in the shared components folder alongside Hero and the tutorial steps. Because it touches the browser clipboard API, it needs the use client directive at the top.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 4,
+        "phase": "change",
+        "location": {
+          "file": "examples/with-supabase/components/copy-button.tsx",
+          "line_range": [
+            5,
+            20
+          ],
+          "symbol": "CopyButton"
+        },
+        "action": "scroll-to",
+        "narration": "The component accepts a text prop — that is the string it will copy to the clipboard. It renders the command in a styled code element next to a small copy icon button. The button carries an aria-label of Copy so screen readers have something to announce.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 5,
+        "phase": "change",
+        "location": {
+          "file": "examples/with-supabase/components/copy-button.tsx",
+          "line_range": [
+            10,
+            30
+          ],
+          "symbol": "CopyButton"
+        },
+        "action": "scroll-to",
+        "narration": "Here is the copy logic. The component first checks whether navigator.clipboard.write is available, which is the signal that the browser supports the ClipboardItem API. If it does, it takes the Safari-compatible path using ClipboardItem and a promise-wrapped blob.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 6,
+        "phase": "change",
+        "location": {
+          "file": "examples/with-supabase/components/copy-button.tsx",
+          "line_range": [
+            25,
+            45
+          ],
+          "symbol": "CopyButton"
+        },
+        "action": "scroll-to",
+        "narration": "The Safari path wraps the text in a ClipboardItem with a text-slash-plain MIME type and calls navigator.clipboard.write inside a setTimeout with a zero-millisecond delay. That delay is a known workaround for Safari's requirement that clipboard writes happen synchronously within a user gesture. The fallback branch simply calls navigator.clipboard.writeText, which works everywhere else.",
+        "estimated_seconds": 15
+      },
+      {
+        "step": 7,
+        "phase": "change",
+        "location": {
+          "file": "examples/with-supabase/components/copy-button.tsx",
+          "line_range": [
+            15,
+            25
+          ],
+          "symbol": "CopyButton"
+        },
+        "action": "flick-back",
+        "narration": "Before either clipboard path runs, there is a guard: window.document.hasFocus must return true. If the document does not have focus the function returns early and nothing happens. This prevents clipboard writes when the tab is in the background, but it does so silently with no user feedback.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 8,
+        "phase": "change",
+        "location": {
+          "file": "examples/with-supabase/components/copy-button.tsx",
+          "line_range": [
+            40,
+            60
+          ],
+          "symbol": "CopyButton"
+        },
+        "action": "scroll-to",
+        "narration": "After a successful copy the component briefly flips a copied state flag, which swaps the icon to a checkmark for visual confirmation. A short timeout resets it back to the clipboard icon. It is a clean, self-contained feedback loop with no external state management needed.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 9,
+        "phase": "change",
+        "location": {
+          "file": "examples/with-supabase/components/hero.tsx",
+          "line_range": [
+            5,
+            30
+          ],
+          "symbol": "Hero"
+        },
+        "action": "open",
+        "narration": "Now let us see how Hero uses the new component. The existing hero markup stays intact; a new section is appended below it. That section contains a short label, a link to the Supabase AI skills docs, and the CopyButton pre-loaded with the npx skills add supabase slash agent-skills command.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 10,
+        "phase": "change",
+        "location": {
+          "file": "examples/with-supabase/components/hero.tsx",
+          "line_range": [
+            30,
+            50
+          ],
+          "symbol": "Hero"
+        },
+        "action": "scroll-to",
+        "narration": "The docs link opens in a new tab and points to supabase.com slash docs slash guides slash getting-started slash ai-skills. CopyButton sits right next to it, so a developer can read the docs link and immediately grab the install command without leaving the page.",
+        "callouts": [
+          {
+            "file": "examples/with-supabase/components/copy-button.tsx",
+            "line": 5,
+            "note": "CopyButton receives the install command as its text prop here"
+          }
+        ],
+        "estimated_seconds": 13
+      },
+      {
+        "step": 11,
+        "phase": "change",
+        "location": {
+          "file": "examples/with-supabase/components/hero.tsx",
+          "line_range": [
+            5,
+            10
+          ],
+          "symbol": "Hero"
+        },
+        "action": "flick-back",
+        "narration": "Hero is a server component by default in this app, but importing CopyButton is fine because Next.js handles the client boundary at the CopyButton level. Hero itself does not need to become a client component just because one of its children is.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 12,
+        "phase": "ripple",
+        "location": {
+          "file": "examples/with-supabase/components/tutorial/connect-supabase-steps.tsx",
+          "line_range": [
+            4,
+            20
+          ],
+          "symbol": "ConnectSupabaseSteps"
+        },
+        "action": "open",
+        "narration": "The second touch point is the tutorial ordered list. A brand-new TutorialStep titled Install agent skills is prepended as the very first item. Because this is an ordered list, every existing step silently shifts down by one number.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 13,
+        "phase": "ripple",
+        "location": {
+          "file": "examples/with-supabase/components/tutorial/connect-supabase-steps.tsx",
+          "line_range": [
+            10,
+            35
+          ],
+          "symbol": "ConnectSupabaseSteps"
+        },
+        "action": "scroll-to",
+        "narration": "The new step contains a paragraph with a next slash link pointing to the same AI skills docs URL used in the hero. It also includes an inline SVG external-link icon to signal that the link leaves the app. Notice this SVG is hardcoded directly in the JSX rather than pulled from a shared icon component.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 14,
+        "phase": "ripple",
+        "location": {
+          "file": "examples/with-supabase/components/tutorial/connect-supabase-steps.tsx",
+          "line_range": [
+            35,
+            60
+          ],
+          "symbol": "ConnectSupabaseSteps"
+        },
+        "action": "scroll-to",
+        "narration": "The original steps — connect your Supabase project, set environment variables, and so on — are all still here, just renumbered. No logic changed; it is purely a structural insertion at the top of the list.",
+        "estimated_seconds": 12
+      },
+      {
+        "step": 15,
+        "phase": "risk",
+        "location": {
+          "file": "examples/with-supabase/components/copy-button.tsx",
+          "line_range": [
+            25,
+            40
+          ],
+          "symbol": "CopyButton"
+        },
+        "action": "jump-to-definition",
+        "narration": "The Safari clipboard workaround is the trickiest part of this PR. The setTimeout with zero delay is a well-known trick, but it is fragile: if Safari tightens its gesture-detection rules in a future version, this could silently stop working. It is worth manually testing in Safari before merging.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 16,
+        "phase": "risk",
+        "location": {
+          "file": "examples/with-supabase/components/copy-button.tsx",
+          "line_range": [
+            15,
+            25
+          ],
+          "symbol": "CopyButton"
+        },
+        "action": "flick-back",
+        "narration": "Both the hasFocus early-return and any clipboard write failure are completely silent to the user. If the copy does not work, the icon never changes and there is no error message. A reviewer should ask whether a visible error state or tooltip is needed here for a polished developer experience.",
+        "estimated_seconds": 14
+      },
+      {
+        "step": 17,
+        "phase": "risk",
+        "location": {
+          "file": "examples/with-supabase/components/tutorial/connect-supabase-steps.tsx",
+          "line_range": [
+            4,
+            15
+          ],
+          "symbol": "ConnectSupabaseSteps"
+        },
+        "action": "open",
+        "narration": "Placing Install agent skills as step one means a developer sees it before they have even connected Supabase. That ordering might confuse someone who does not know what agent skills are yet. It is worth confirming with the team that this sequence matches the intended onboarding flow.",
+        "estimated_seconds": 13
+      },
+      {
+        "step": 18,
+        "phase": "wrap",
+        "location": {
+          "file": "examples/with-supabase/components/hero.tsx",
+          "line_range": [
+            5,
+            50
+          ],
+          "symbol": "Hero"
+        },
+        "action": "flick-back",
+        "narration": "All told, this is a focused, self-contained presentational change: a new clipboard-aware CopyButton, a skills CTA wired into the hero, and a matching tutorial step — all confined to the with-supabase example with no shared infrastructure touched.",
+        "estimated_seconds": 13
+      }
+    ]
+  },
+  "markdown": "# PR Briefing — #93193: Add skills CTA to hero and tutorial steps\n\n**Repo:** `vercel/next.js`  \n**Author:** saltcod  \n**Branch:** `canary` ← `add-skills` (`20ab5ad`)  \n**URL:** https://github.com/vercel/next.js/pull/93193\n\n## Summary\n\nThis PR adds a 'skills CTA' (call-to-action) to the `with-supabase` example app, promoting the installation of Supabase agent skills for AI-assisted development. It introduces a new `CopyButton` client component that renders a copyable command (`npx skills add supabase/agent-skills`) with clipboard support including a Safari-compatible fallback. The `Hero` component is updated to display a link to Supabase AI skills docs alongside the `CopyButton`. A new 'Install agent skills' tutorial step is also prepended to the `ConnectSupabaseSteps` ordered list, shifting all existing steps down by one.\n\n## Architecture notes\n\nThe change touches three files within `examples/with-supabase`: a new `CopyButton` component, the existing `Hero` component, and `ConnectSupabaseSteps` in the tutorial flow. `CopyButton` uses the browser `ClipboardItem` API with a `navigator.clipboard.write` path for Safari and a `writeText` fallback, making it a client component. No shared state or API routes are involved; the change is purely presentational and confined to the `with-supabase` example.\n\n## Ripple risks\n\nAnalyzed 2 changed exports. No untouched external callers found — all usages appear to be inside the PR diff.\n\n_Analyzed 3 file(s), 3 changed export(s), 0 uncovered callsite(s) in 23.5s._\n\n## Walkthrough outline\n\n_18 steps across 6 chapters, approximately 4 min 55s._\n\n### Why this change\n\n1. **motivation** · `examples/with-supabase/components/hero.tsx` L1-10 `Hero`\n   This PR is about developer onboarding. The with-supabase example app is often the first thing a developer sees, and the team wants to surface Supabase agent skills right at that moment. The goal is a single install command, one click to copy, visible in both the hero banner and the tutorial checklist.\n\n2. **motivation** · `examples/with-supabase/components/tutorial/connect-supabase-steps.tsx` L4-15 `ConnectSupabaseSteps`\n   Two touch points get the CTA: the hero section at the top of the page, and the step-by-step tutorial list below it. Both point to the same Supabase AI skills docs URL and the same install command. That repetition is intentional — catch the developer wherever their eye lands first.\n\n### The new copy button component\n\n3. **change** · `examples/with-supabase/components/copy-button.tsx` L1-10 `CopyButton`\n   The centerpiece of this PR is a brand-new client component called CopyButton. It lives in the shared components folder alongside Hero and the tutorial steps. Because it touches the browser clipboard API, it needs the use client directive at the top.\n\n4. **change** · `examples/with-supabase/components/copy-button.tsx` L5-20 `CopyButton`\n   The component accepts a text prop — that is the string it will copy to the clipboard. It renders the command in a styled code element next to a small copy icon button. The button carries an aria-label of Copy so screen readers have something to announce.\n\n5. **change** · `examples/with-supabase/components/copy-button.tsx` L10-30 `CopyButton`\n   Here is the copy logic. The component first checks whether navigator.clipboard.write is available, which is the signal that the browser supports the ClipboardItem API. If it does, it takes the Safari-compatible path using ClipboardItem and a promise-wrapped blob.\n\n6. **change** · `examples/with-supabase/components/copy-button.tsx` L25-45 `CopyButton`\n   The Safari path wraps the text in a ClipboardItem with a text-slash-plain MIME type and calls navigator.clipboard.write inside a setTimeout with a zero-millisecond delay. That delay is a known workaround for Safari's requirement that clipboard writes happen synchronously within a user gesture. The fallback branch simply calls navigator.clipboard.writeText, which works everywhere else.\n\n7. **change** · `examples/with-supabase/components/copy-button.tsx` L15-25 `CopyButton`\n   Before either clipboard path runs, there is a guard: window.document.hasFocus must return true. If the document does not have focus the function returns early and nothing happens. This prevents clipboard writes when the tab is in the background, but it does so silently with no user feedback.\n\n8. **change** · `examples/with-supabase/components/copy-button.tsx` L40-60 `CopyButton`\n   After a successful copy the component briefly flips a copied state flag, which swaps the icon to a checkmark for visual confirmation. A short timeout resets it back to the clipboard icon. It is a clean, self-contained feedback loop with no external state management needed.\n\n### Hero gets the skills CTA\n\n9. **change** · `examples/with-supabase/components/hero.tsx` L5-30 `Hero`\n   Now let us see how Hero uses the new component. The existing hero markup stays intact; a new section is appended below it. That section contains a short label, a link to the Supabase AI skills docs, and the CopyButton pre-loaded with the npx skills add supabase slash agent-skills command.\n\n10. **change** · `examples/with-supabase/components/hero.tsx` L30-50 `Hero`\n   The docs link opens in a new tab and points to supabase.com slash docs slash guides slash getting-started slash ai-skills. CopyButton sits right next to it, so a developer can read the docs link and immediately grab the install command without leaving the page.\n\n11. **change** · `examples/with-supabase/components/hero.tsx` L5-10 `Hero`\n   Hero is a server component by default in this app, but importing CopyButton is fine because Next.js handles the client boundary at the CopyButton level. Hero itself does not need to become a client component just because one of its children is.\n\n### Tutorial flow picks it up too\n\n12. **ripple** · `examples/with-supabase/components/tutorial/connect-supabase-steps.tsx` L4-20 `ConnectSupabaseSteps`\n   The second touch point is the tutorial ordered list. A brand-new TutorialStep titled Install agent skills is prepended as the very first item. Because this is an ordered list, every existing step silently shifts down by one number.\n\n13. **ripple** · `examples/with-supabase/components/tutorial/connect-supabase-steps.tsx` L10-35 `ConnectSupabaseSteps`\n   The new step contains a paragraph with a next slash link pointing to the same AI skills docs URL used in the hero. It also includes an inline SVG external-link icon to signal that the link leaves the app. Notice this SVG is hardcoded directly in the JSX rather than pulled from a shared icon component.\n\n14. **ripple** · `examples/with-supabase/components/tutorial/connect-supabase-steps.tsx` L35-60 `ConnectSupabaseSteps`\n   The original steps — connect your Supabase project, set environment variables, and so on — are all still here, just renumbered. No logic changed; it is purely a structural insertion at the top of the list.\n\n### What could go wrong\n\n15. **risk** · `examples/with-supabase/components/copy-button.tsx` L25-40 `CopyButton`\n   The Safari clipboard workaround is the trickiest part of this PR. The setTimeout with zero delay is a well-known trick, but it is fragile: if Safari tightens its gesture-detection rules in a future version, this could silently stop working. It is worth manually testing in Safari before merging.\n\n16. **risk** · `examples/with-supabase/components/copy-button.tsx` L15-25 `CopyButton`\n   Both the hasFocus early-return and any clipboard write failure are completely silent to the user. If the copy does not work, the icon never changes and there is no error message. A reviewer should ask whether a visible error state or tooltip is needed here for a polished developer experience.\n\n17. **risk** · `examples/with-supabase/components/tutorial/connect-supabase-steps.tsx` L4-15 `ConnectSupabaseSteps`\n   Placing Install agent skills as step one means a developer sees it before they have even connected Supabase. That ordering might confuse someone who does not know what agent skills are yet. It is worth confirming with the team that this sequence matches the intended onboarding flow.\n\n### Bottom line\n\n18. **wrap** · `examples/with-supabase/components/hero.tsx` L5-50 `Hero`\n   All told, this is a focused, self-contained presentational change: a new clipboard-aware CopyButton, a skills CTA wired into the hero, and a matching tutorial step — all confined to the with-supabase example with no shared infrastructure touched.\n\n## Reviewer checklist\n\n- [ ] Verify the external URL `https://supabase.com/docs/guides/getting-started/ai-skills` is live and resolves to the correct documentation page.\n- [ ] Confirm the install command `npx skills add supabase/agent-skills` is accurate and currently valid.\n- [ ] Test the `CopyButton` clipboard functionality in Safari to ensure the `ClipboardItem` + `setTimeout` workaround works without race conditions or silent failures.\n- [ ] Check that prepending 'Install agent skills' as step 1 in `ConnectSupabaseSteps` is the intended ordering, given users may not have Supabase connected yet at that point.\n- [ ] Ensure the `CopyButton` copy action provides visible user feedback on failure (currently errors appear to be swallowed silently) and that the button is accessible to screen readers.\n\n## File-by-file\n\n### `examples/with-supabase/components/copy-button.tsx`\n\nAdds a new `CopyButton` client component in `examples/with-supabase/components/copy-button.tsx` that renders a code snippet with a clipboard copy button, using the `ClipboardItem` API for Safari compatibility and falling back to `navigator.clipboard.writeText`.\n\n_Likely provides a UI element for copying agent skill install commands introduced in the hero/tutorial steps CTA changes._\n\n**Risks:**\n- The `setTimeout(..., 0)` + manual promise pattern for Safari clipboard write is non-standard and may be fragile; verify it actually works in Safari and doesn't introduce race conditions\n- The `window.document.hasFocus()` guard silently no-ops the copy without user feedback — consider showing an error or tooltip\n- No error handling shown to the user if clipboard write fails (both branches swallow errors silently)\n- Component has no accessible visible label for the copy button beyond `aria-label='Copy'`; verify screen reader experience\n- ClipboardItem feature detection checks `navigator.clipboard?.write` but then uses `navigator.clipboard.write` (non-optional) inside the branch — safe here but worth noting\n\n### `examples/with-supabase/components/hero.tsx`\n\nAdds a new section to the `Hero` component that renders a link to Supabase AI skills docs and a `CopyButton` pre-filled with the command `npx skills add supabase/agent-skills`.\n\n_Promotes Supabase agent skills installation directly from the example app's hero section to improve developer onboarding._\n\n**Risks:**\n- Verify `CopyButton` component exists and accepts a `text` prop with the expected interface\n- The URL `https://supabase.com/docs/guides/getting-started/ai-skills` should be confirmed as live and correct\n- The command `npx skills add supabase/agent-skills` should be validated as the correct/current install command\n- No tests or snapshot updates included — check if any exist for the Hero component\n\n### `examples/with-supabase/components/tutorial/connect-supabase-steps.tsx`\n\nA new `TutorialStep` titled 'Install agent skills' is prepended to the ordered list in `ConnectSupabaseSteps`, containing a paragraph with a `next/link` external link to the Supabase AI skills docs, including an inline SVG external-link icon.\n\n_Likely promotes Supabase agent skills tooling to users setting up the with-supabase example, driving adoption of AI-assisted development features._\n\n**Risks:**\n- New step is inserted as step 1, shifting all existing numbered steps down — verify UX intent and whether step numbering/ordering is correct\n- External URL (supabase.com/docs/guides/getting-started/ai-skills) should be validated as live and stable\n- SVG icon is hardcoded inline rather than using a shared icon component — inconsistent with potential project conventions\n- 'Install agent skills' step appears before environment setup steps, which may confuse users who haven't connected Supabase yet\n\n---\n_Generated by prbrief • model: claude-sonnet-4-6 • 5 LLM calls • $0.09 • 58.4s_",
+  "files": {
+    "examples/with-supabase/components/hero.tsx": "import { NextLogo } from \"./next-logo\";\nimport { SupabaseLogo } from \"./supabase-logo\";\nimport { CopyButton } from \"./copy-button\";\n\nexport function Hero() {\n  return (\n    <div className=\"flex flex-col gap-16 items-center\">\n      <div className=\"flex gap-8 justify-center items-center\">\n        <a\n          href=\"https://supabase.com/?utm_source=create-next-app&utm_medium=template&utm_term=nextjs\"\n          target=\"_blank\"\n          rel=\"noreferrer\"\n        >\n          <SupabaseLogo />\n        </a>\n        <span className=\"border-l rotate-45 h-6\" />\n        <a href=\"https://nextjs.org/\" target=\"_blank\" rel=\"noreferrer\">\n          <NextLogo />\n        </a>\n      </div>\n      <h1 className=\"sr-only\">Supabase and Next.js Starter Template</h1>\n      <p className=\"text-3xl lg:text-4xl !leading-tight mx-auto max-w-xl text-center\">\n        The fastest way to build apps with{\" \"}\n        <a\n          href=\"https://supabase.com/?utm_source=create-next-app&utm_medium=template&utm_term=nextjs\"\n          target=\"_blank\"\n          className=\"font-bold hover:underline\"\n          rel=\"noreferrer\"\n        >\n          Supabase\n        </a>{\" \"}\n        and{\" \"}\n        <a\n          href=\"https://nextjs.org/\"\n          target=\"_blank\"\n          className=\"font-bold hover:underline\"\n          rel=\"noreferrer\"\n        >\n          Next.js\n        </a>\n      </p>\n      <div className=\"flex flex-col items-center gap-3\">\n        <p className=\"text-sm text-foreground/70\">\n          Install{\" \"}\n          <a\n            href=\"https://supabase.com/docs/guides/getting-started/ai-skills\"\n            target=\"_blank\"\n            rel=\"noreferrer\"\n            className=\"font-medium underline\"\n          >\n            agent skills\n          </a>{\" \"}\n          to help you move faster\n        </p>\n        <CopyButton text=\"npx skills add supabase/agent-skills\" />\n      </div>\n      <div className=\"w-full p-[1px] bg-gradient-to-r from-transparent via-foreground/10 to-transparent my-8\" />\n    </div>\n  );\n}\n",
+    "examples/with-supabase/components/tutorial/connect-supabase-steps.tsx": "import { TutorialStep } from \"./tutorial-step\";\nimport Link from \"next/link\";\n\nexport function ConnectSupabaseSteps() {\n  return (\n    <ol className=\"flex flex-col gap-6\">\n      <TutorialStep title=\"Install agent skills\">\n        <p>\n          Install agent skills to help you move faster and more effectively.{\" \"}\n          <Link\n            href=\"https://supabase.com/docs/guides/getting-started/ai-skills\"\n            target=\"_blank\"\n            rel=\"noreferrer\"\n            className=\"font-bold hover:underline text-foreground/80 inline-flex items-center gap-1\"\n          >\n            Learn more\n            <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" strokeWidth=\"2\" strokeLinecap=\"round\" strokeLinejoin=\"round\">\n              <path d=\"M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6\" />\n              <polyline points=\"15 3 21 3 21 9\" />\n              <line x1=\"10\" y1=\"14\" x2=\"21\" y2=\"3\" />\n            </svg>\n          </Link>\n        </p>\n      </TutorialStep>\n\n      <TutorialStep title=\"Create Supabase project\">\n        <p>\n          Head over to{\" \"}\n          <a\n            href=\"https://app.supabase.com/project/_/settings/api\"\n            target=\"_blank\"\n            className=\"font-bold hover:underline text-foreground/80\"\n            rel=\"noreferrer\"\n          >\n            database.new\n          </a>{\" \"}\n          and create a new Supabase project.\n        </p>\n      </TutorialStep>\n\n      <TutorialStep title=\"Declare environment variables\">\n        <p>\n          Rename the{\" \"}\n          <span className=\"relative rounded bg-muted px-[0.3rem] py-[0.2rem] font-mono text-xs font-medium text-secondary-foreground border\">\n            .env.example\n          </span>{\" \"}\n          file in your Next.js app to{\" \"}\n          <span className=\"relative rounded bg-muted px-[0.3rem] py-[0.2rem] font-mono text-xs font-medium text-secondary-foreground border\">\n            .env.local\n          </span>{\" \"}\n          and populate with values from{\" \"}\n          <a\n            href=\"https://app.supabase.com/project/_/settings/api\"\n            target=\"_blank\"\n            className=\"font-bold hover:underline text-foreground/80\"\n            rel=\"noreferrer\"\n          >\n            your Supabase project&apos;s API Settings\n          </a>\n          .\n        </p>\n      </TutorialStep>\n\n      <TutorialStep title=\"Restart your Next.js development server\">\n        <p>\n          You may need to quit your Next.js development server and run{\" \"}\n          <span className=\"relative rounded bg-muted px-[0.3rem] py-[0.2rem] font-mono text-xs font-medium text-secondary-foreground border\">\n            npm run dev\n          </span>{\" \"}\n          again to load the new environment variables.\n        </p>\n      </TutorialStep>\n\n      <TutorialStep title=\"Refresh the page\">\n        <p>\n          You may need to refresh the page for Next.js to load the new\n          environment variables.\n        </p>\n      </TutorialStep>\n    </ol>\n  );\n}\n",
+    "examples/with-supabase/components/copy-button.tsx": "\"use client\";\n\nimport { useState } from \"react\";\n\nexport function CopyButton({ text }: { text: string }) {\n  const [copied, setCopied] = useState(false);\n\n  const copy = async () => {\n    if (!window.document.hasFocus()) return;\n\n    if (typeof ClipboardItem !== \"undefined\" && navigator.clipboard?.write) {\n      // Safari requires the ClipboardItem promise pattern — direct async writes are blocked.\n      const item = new ClipboardItem({\n        \"text/plain\": Promise.resolve(text).then(\n          (t) => new Blob([t], { type: \"text/plain\" })\n        ),\n      });\n\n      let resolve = () => {};\n      let reject = () => {};\n      const promise = new Promise<void>((res, rej) => {\n        resolve = res;\n        reject = rej;\n      });\n      // Safari requires the promise to resolve shortly after the write call.\n      setTimeout(() => {\n        navigator.clipboard\n          .write([item])\n          .then(resolve)\n          .catch(reject);\n      }, 0);\n      await promise;\n    } else {\n      await navigator.clipboard?.writeText(text);\n    }\n\n    setCopied(true);\n    setTimeout(() => setCopied(false), 2000);\n  };\n\n  return (\n    <div className=\"flex items-center gap-2 rounded-lg border border-foreground/10 bg-foreground/5 px-4 py-3 text-sm text-foreground/80\">\n      <code className=\"font-mono text-xs\">{text}</code>\n      <button\n        onClick={copy}\n        aria-label=\"Copy\"\n        className=\"ml-2 rounded p-1 hover:bg-foreground/10 transition-colors\"\n      >\n        {copied ? (\n          <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" strokeWidth=\"2\" strokeLinecap=\"round\" strokeLinejoin=\"round\">\n            <polyline points=\"20 6 9 17 4 12\" />\n          </svg>\n        ) : (\n          <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" strokeWidth=\"2\" strokeLinecap=\"round\" strokeLinejoin=\"round\">\n            <rect x=\"9\" y=\"9\" width=\"13\" height=\"13\" rx=\"2\" ry=\"2\" />\n            <path d=\"M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1\" />\n          </svg>\n        )}\n      </button>\n    </div>\n  );\n}\n"
+  },
+  "has_audio": true,
+  "has_video": true,
+  "has_thumbnail": true,
+  "audio_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/vercel/next.js/pr-93193/20ab5ad2a3fb/audio.mp3",
+  "audio_manifest": {
+    "file": "audio.mp3",
+    "total_ms": 315058,
+    "silence_ms": 400,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "adapter": "elevenlabs",
+    "model": "eleven_turbo_v2_5",
+    "intro": {
+      "narration": "Grab some popcorn and let's dive in. Here's the pitch: This PR adds a 'skills CTA' (call-to-action) to the `with-supabase` example app, promoting the installation of Supabase agent skills for AI-assisted development.",
+      "narration_ms": 14071,
+      "gap_ms": 500,
+      "duration_ms": 14571
+    },
+    "steps": [
+      {
+        "step": 1,
+        "start_ms": 14571,
+        "end_ms": 31150
+      },
+      {
+        "step": 2,
+        "start_ms": 31550,
+        "end_ms": 49290
+      },
+      {
+        "step": 3,
+        "start_ms": 49690,
+        "end_ms": 64551
+      },
+      {
+        "step": 4,
+        "start_ms": 64951,
+        "end_ms": 79487
+      },
+      {
+        "step": 5,
+        "start_ms": 79887,
+        "end_ms": 95073
+      },
+      {
+        "step": 6,
+        "start_ms": 95473,
+        "end_ms": 118554
+      },
+      {
+        "step": 7,
+        "start_ms": 118954,
+        "end_ms": 137019
+      },
+      {
+        "step": 8,
+        "start_ms": 137419,
+        "end_ms": 153301
+      },
+      {
+        "step": 9,
+        "start_ms": 153701,
+        "end_ms": 171627
+      },
+      {
+        "step": 10,
+        "start_ms": 172027,
+        "end_ms": 187213
+      },
+      {
+        "step": 11,
+        "start_ms": 187613,
+        "end_ms": 200988
+      },
+      {
+        "step": 12,
+        "start_ms": 201388,
+        "end_ms": 214577
+      },
+      {
+        "step": 13,
+        "start_ms": 214977,
+        "end_ms": 233599
+      },
+      {
+        "step": 14,
+        "start_ms": 233999,
+        "end_ms": 247652
+      },
+      {
+        "step": 15,
+        "start_ms": 248052,
+        "end_ms": 265142
+      },
+      {
+        "step": 16,
+        "start_ms": 265542,
+        "end_ms": 282353
+      },
+      {
+        "step": 17,
+        "start_ms": 282753,
+        "end_ms": 298961
+      },
+      {
+        "step": 18,
+        "start_ms": 299361,
+        "end_ms": 315058
+      }
+    ],
+    "chapters": [
+      {
+        "title": "Why this change",
+        "start_ms": 14571,
+        "end_ms": 49290,
+        "step_range": [
+          1,
+          2
+        ]
+      },
+      {
+        "title": "The new copy button component",
+        "start_ms": 49690,
+        "end_ms": 153301,
+        "step_range": [
+          3,
+          8
+        ]
+      },
+      {
+        "title": "Hero gets the skills CTA",
+        "start_ms": 153701,
+        "end_ms": 200988,
+        "step_range": [
+          9,
+          11
+        ]
+      },
+      {
+        "title": "Tutorial flow picks it up too",
+        "start_ms": 201388,
+        "end_ms": 247652,
+        "step_range": [
+          12,
+          14
+        ]
+      },
+      {
+        "title": "What could go wrong",
+        "start_ms": 248052,
+        "end_ms": 298961,
+        "step_range": [
+          15,
+          17
+        ]
+      },
+      {
+        "title": "Bottom line",
+        "start_ms": 299361,
+        "end_ms": 315058,
+        "step_range": [
+          18,
+          18
+        ]
+      }
+    ],
+    "generated_at": 1777043090318
+  },
+  "audio_manifest_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/vercel/next.js/pr-93193/20ab5ad2a3fb/audio.json",
+  "video_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/vercel/next.js/pr-93193/20ab5ad2a3fb/video-github.mp4",
+  "thumbnail_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/vercel/next.js/pr-93193/20ab5ad2a3fb/thumbnail.png",
+  "pr_url": "https://github.com/vercel/next.js/pull/93193",
+  "is_sample": false,
+  "sample_id": null
+}
