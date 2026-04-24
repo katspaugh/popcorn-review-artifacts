@@ -1548,10 +1548,230 @@
   "has_audio": true,
   "has_video": true,
   "has_thumbnail": true,
-  "audio_url": "https://github.com/katspaugh/popcorn-review-artifacts/releases/download/prbrief-safe-global-safe-wallet-monorepo-pr-7627-8aebe8f4ebd1/audio.mp3",
-  "audio_manifest_url": "https://github.com/katspaugh/popcorn-review-artifacts/releases/download/prbrief-safe-global-safe-wallet-monorepo-pr-7627-8aebe8f4ebd1/audio.json",
-  "video_url": "https://github.com/katspaugh/popcorn-review-artifacts/releases/download/prbrief-safe-global-safe-wallet-monorepo-pr-7627-8aebe8f4ebd1/video-github.mp4",
-  "thumbnail_url": "https://github.com/katspaugh/popcorn-review-artifacts/releases/download/prbrief-safe-global-safe-wallet-monorepo-pr-7627-8aebe8f4ebd1/thumbnail.png",
+  "audio_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-wallet-monorepo/pr-7627/8aebe8f4ebd1/audio.mp3",
+  "audio_manifest": {
+    "file": "audio.mp3",
+    "total_ms": 519842,
+    "silence_ms": 400,
+    "voice": "nPczCjzI2devNBz1zQrb",
+    "adapter": "elevenlabs",
+    "model": "eleven_turbo_v2_5",
+    "intro": {
+      "narration": "Grab some popcorn and lay back. I'm going to walk you through this pull request in a few minutes. Here's the pitch: This PR adds a Security Hub feature to the Spaces product, providing a real-time security posture dashboard that runs 11 automated scanners against all Safe accounts in a workspace. Let's dive right in.",
+      "narration_ms": 18483,
+      "gap_ms": 500,
+      "duration_ms": 18983
+    },
+    "steps": [
+      {
+        "step": 1,
+        "start_ms": 18983,
+        "end_ms": 38209
+      },
+      {
+        "step": 2,
+        "start_ms": 38609,
+        "end_ms": 59135
+      },
+      {
+        "step": 3,
+        "start_ms": 59535,
+        "end_ms": 82941
+      },
+      {
+        "step": 4,
+        "start_ms": 83341,
+        "end_ms": 99316
+      },
+      {
+        "step": 5,
+        "start_ms": 99716,
+        "end_ms": 123493
+      },
+      {
+        "step": 6,
+        "start_ms": 123893,
+        "end_ms": 142469
+      },
+      {
+        "step": 7,
+        "start_ms": 142869,
+        "end_ms": 166321
+      },
+      {
+        "step": 8,
+        "start_ms": 166721,
+        "end_ms": 188083
+      },
+      {
+        "step": 9,
+        "start_ms": 188483,
+        "end_ms": 209102
+      },
+      {
+        "step": 10,
+        "start_ms": 209502,
+        "end_ms": 230493
+      },
+      {
+        "step": 11,
+        "start_ms": 230893,
+        "end_ms": 255228
+      },
+      {
+        "step": 12,
+        "start_ms": 255628,
+        "end_ms": 276247
+      },
+      {
+        "step": 13,
+        "start_ms": 276647,
+        "end_ms": 294805
+      },
+      {
+        "step": 14,
+        "start_ms": 295205,
+        "end_ms": 318471
+      },
+      {
+        "step": 15,
+        "start_ms": 318871,
+        "end_ms": 341209
+      },
+      {
+        "step": 16,
+        "start_ms": 341609,
+        "end_ms": 363343
+      },
+      {
+        "step": 17,
+        "start_ms": 363743,
+        "end_ms": 382273
+      },
+      {
+        "step": 18,
+        "start_ms": 382673,
+        "end_ms": 394794
+      },
+      {
+        "step": 19,
+        "start_ms": 395194,
+        "end_ms": 409312
+      },
+      {
+        "step": 20,
+        "start_ms": 409712,
+        "end_ms": 435300
+      },
+      {
+        "step": 21,
+        "start_ms": 435700,
+        "end_ms": 456366
+      },
+      {
+        "step": 22,
+        "start_ms": 456766,
+        "end_ms": 477339
+      },
+      {
+        "step": 23,
+        "start_ms": 477739,
+        "end_ms": 499287
+      },
+      {
+        "step": 24,
+        "start_ms": 499687,
+        "end_ms": 519842
+      }
+    ],
+    "chapters": [
+      {
+        "title": "Why this feature exists",
+        "start_ms": 18983,
+        "end_ms": 59135,
+        "step_range": [
+          1,
+          2
+        ]
+      },
+      {
+        "title": "The scanner contract",
+        "start_ms": 59535,
+        "end_ms": 123493,
+        "step_range": [
+          3,
+          5
+        ]
+      },
+      {
+        "title": "Scanners in action",
+        "start_ms": 123893,
+        "end_ms": 209102,
+        "step_range": [
+          6,
+          9
+        ]
+      },
+      {
+        "title": "Scoring and grading",
+        "start_ms": 209502,
+        "end_ms": 255228,
+        "step_range": [
+          10,
+          11
+        ]
+      },
+      {
+        "title": "The scan engine",
+        "start_ms": 255628,
+        "end_ms": 318471,
+        "step_range": [
+          12,
+          14
+        ]
+      },
+      {
+        "title": "UI surfaces",
+        "start_ms": 318871,
+        "end_ms": 382273,
+        "step_range": [
+          15,
+          17
+        ]
+      },
+      {
+        "title": "Wiring it into Spaces",
+        "start_ms": 382673,
+        "end_ms": 409312,
+        "step_range": [
+          18,
+          19
+        ]
+      },
+      {
+        "title": "Things worth a second look",
+        "start_ms": 409712,
+        "end_ms": 499287,
+        "step_range": [
+          20,
+          23
+        ]
+      },
+      {
+        "title": "Bottom line",
+        "start_ms": 499687,
+        "end_ms": 519842,
+        "step_range": [
+          24,
+          24
+        ]
+      }
+    ],
+    "generated_at": 1776976229278
+  },
+  "audio_manifest_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-wallet-monorepo/pr-7627/8aebe8f4ebd1/audio.json",
+  "video_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-wallet-monorepo/pr-7627/8aebe8f4ebd1/video-github.mp4",
+  "thumbnail_url": "https://katspaugh.github.io/popcorn-review-artifacts/briefings/safe-global/safe-wallet-monorepo/pr-7627/8aebe8f4ebd1/thumbnail.png",
   "pr_url": "https://github.com/safe-global/safe-wallet-monorepo/pull/7627",
   "is_sample": false,
   "sample_id": null
